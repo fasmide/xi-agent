@@ -1,10 +1,9 @@
 use anyhow::Context;
-use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::{AppEvent, LlmProvider, Message};
+use super::{LlmEvent, LlmProvider, Message};
 
 pub struct OllamaProvider {
     pub base_url: String,
@@ -60,12 +59,11 @@ struct ChunkMessage {
 
 // ── Provider implementation ───────────────────────────────────────────────────
 
-#[async_trait]
 impl LlmProvider for OllamaProvider {
     async fn stream_chat(
         &self,
         messages: &[Message],
-        tx: UnboundedSender<AppEvent>,
+        tx: UnboundedSender<LlmEvent>,
     ) -> anyhow::Result<()> {
         let url = format!("{}/api/chat", self.base_url);
 
@@ -115,15 +113,15 @@ impl LlmProvider for OllamaProvider {
                 match serde_json::from_str::<ChatChunk>(&line) {
                     Ok(chunk) => {
                         if !chunk.message.content.is_empty() {
-                            let _ = tx.send(AppEvent::Token(chunk.message.content));
+                            let _ = tx.send(LlmEvent::Token(chunk.message.content));
                         }
                         if chunk.done {
-                            let _ = tx.send(AppEvent::Done);
+                            let _ = tx.send(LlmEvent::Done);
                             return Ok(());
                         }
                     }
                     Err(e) => {
-                        let _ = tx.send(AppEvent::Error(format!("Parse error: {e}")));
+                        let _ = tx.send(LlmEvent::Error(format!("Parse error: {e}")));
                         return Ok(());
                     }
                 }
@@ -131,7 +129,7 @@ impl LlmProvider for OllamaProvider {
         }
 
         // Stream ended without a done=true (shouldn't happen with Ollama, but be safe).
-        let _ = tx.send(AppEvent::Done);
+        let _ = tx.send(LlmEvent::Done);
         Ok(())
     }
 }

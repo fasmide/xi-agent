@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// A single message in the conversation history.
@@ -25,7 +24,7 @@ impl Role {
 
 /// Events sent from a streaming LLM task back to the UI.
 #[derive(Debug)]
-pub enum AppEvent {
+pub enum LlmEvent {
     /// A token chunk from the model.
     Token(String),
     /// The stream finished successfully.
@@ -35,13 +34,12 @@ pub enum AppEvent {
 }
 
 /// Trait every LLM backend must implement.
-#[async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn stream_chat(
+    fn stream_chat(
         &self,
         messages: &[Message],
-        tx: UnboundedSender<AppEvent>,
-    ) -> anyhow::Result<()>;
+        tx: UnboundedSender<LlmEvent>,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
 }
 
 pub mod ollama;

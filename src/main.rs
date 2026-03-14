@@ -16,7 +16,7 @@ mod llm;
 mod ui;
 
 use llm::ollama::OllamaProvider;
-use llm::{AppEvent, LlmProvider, Message, Role};
+use llm::{LlmEvent, LlmProvider, Message, Role};
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -30,8 +30,8 @@ pub struct App<'a> {
     /// Height of the log pane from the last draw — used as the page size for scrolling.
     pub last_log_height: usize,
     pub streaming: bool,
-    event_rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    event_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    event_rx: tokio::sync::mpsc::UnboundedReceiver<LlmEvent>,
+    event_tx: tokio::sync::mpsc::UnboundedSender<LlmEvent>,
 }
 
 impl<'a> App<'a> {
@@ -50,7 +50,7 @@ impl<'a> App<'a> {
     }
 
     /// Take the textarea content and start an LLM streaming request.
-    pub fn submit(&mut self, provider: &Arc<dyn LlmProvider>) {
+    pub fn submit<P: LlmProvider + Send + Sync + 'static>(&mut self, provider: &Arc<P>) {
         let lines: Vec<String> = self.textarea.lines().to_vec();
         let text = lines.join("\n");
         let trimmed = text.trim().to_string();
@@ -73,10 +73,11 @@ impl<'a> App<'a> {
 
         let provider = Arc::clone(provider);
         let tx = self.event_tx.clone();
+        // History is everything except the trailing empty assistant message we just pushed.
         let history: Vec<Message> = self.messages[..self.messages.len() - 1].to_vec();
         tokio::spawn(async move {
             if let Err(e) = provider.stream_chat(&history, tx.clone()).await {
-                let _ = tx.send(AppEvent::Error(e.to_string()));
+                let _ = tx.send(LlmEvent::Error(e.to_string()));
             }
         });
     }
@@ -107,15 +108,15 @@ impl<'a> App<'a> {
     pub fn apply_events(&mut self) {
         while let Ok(ev) = self.event_rx.try_recv() {
             match ev {
-                AppEvent::Token(token) => {
+                LlmEvent::Token(token) => {
                     if let Some(last) = self.messages.last_mut() {
                         last.content.push_str(&token);
                     }
                 }
-                AppEvent::Done => {
+                LlmEvent::Done => {
                     self.streaming = false;
                 }
-                AppEvent::Error(e) => {
+                LlmEvent::Error(e) => {
                     if let Some(last) = self.messages.last_mut() {
                         last.content = format!("[Error: {e}]");
                     }
@@ -130,7 +131,7 @@ impl<'a> App<'a> {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let provider: Arc<dyn LlmProvider> = Arc::new(OllamaProvider::from_env());
+    let provider = Arc::new(OllamaProvider::from_env());
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -158,10 +159,10 @@ async fn main() -> io::Result<()> {
     res
 }
 
-async fn run(
+async fn run<P: LlmProvider + Send + Sync + 'static>(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App<'_>,
-    provider: &Arc<dyn LlmProvider>,
+    provider: &Arc<P>,
 ) -> io::Result<()> {
     loop {
         app.apply_events();

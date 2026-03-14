@@ -23,6 +23,12 @@ pub static COMMANDS: &[SlashCommand] = &[
         takes_arg: true,
     },
     SlashCommand {
+        name: "provider",
+        usage: "/provider <name>",
+        description: "Switch the LLM provider (copilot / openai / codex / ollama)",
+        takes_arg: true,
+    },
+    SlashCommand {
         name: "quit",
         usage: "/quit",
         description: "Quit the application",
@@ -68,6 +74,15 @@ impl CompletionItem {
         }
     }
 
+    pub(crate) fn from_provider(name: &str, label: &str) -> Self {
+        Self {
+            label: format!("{name}  —  {label}"),
+            detail: String::new(),
+            complete_to: format!("/provider {}", name),
+            loading: false,
+        }
+    }
+
     pub(crate) fn loading_indicator() -> Self {
         Self {
             label: "fetching models…".to_string(),
@@ -83,14 +98,16 @@ impl CompletionItem {
 /// Build the completion list for the current textarea `input`.
 ///
 /// **Phase 1 — command name** (no space yet): filter `COMMANDS` by prefix.
-/// **Phase 2 — argument** (space present after `/model`): filter available
-/// model names by the typed prefix, or show a loading indicator while the
-/// model list is being fetched.
+/// **Phase 2 — argument** (space present after `/model` or `/provider`): filter
+/// available model / provider names by the typed prefix, or show a loading
+/// indicator while the model list is being fetched.
 pub fn completions_for(
     input: &str,
     available_models: Option<&[String]>,
     models_loading: bool,
 ) -> Vec<CompletionItem> {
+    use crate::provider::ProviderKind;
+
     let Some(rest) = input.strip_prefix('/') else {
         return vec![];
     };
@@ -117,6 +134,11 @@ pub fn completions_for(
                         vec![]
                     }
                 }
+                "provider" => ProviderKind::all()
+                    .iter()
+                    .filter(|p| p.name().starts_with(arg))
+                    .map(|p| CompletionItem::from_provider(p.name(), p.label()))
+                    .collect(),
                 _ => vec![],
             }
         }
@@ -137,8 +159,12 @@ pub enum CommandAction {
     Quit,
     /// Switch model to the given name.
     Model(String),
-    /// `/model` typed with no argument — show usage hint.
+    /// `/model` typed with no argument — show interactive selection menu.
     ModelNoArg,
+    /// Switch provider to the given name (e.g. `"copilot"`, `"openai"`).
+    Provider(String),
+    /// `/provider` typed with no argument — show interactive selection menu.
+    ProviderNoArg,
 }
 
 /// Parse a complete slash command input string into an action.
@@ -150,10 +176,12 @@ pub fn parse(input: &str) -> Option<CommandAction> {
         None => (rest, ""),
     };
     match name {
-        "new" => Some(CommandAction::New),
-        "quit" => Some(CommandAction::Quit),
+        "new"                      => Some(CommandAction::New),
+        "quit"                     => Some(CommandAction::Quit),
         "model" if !arg.is_empty() => Some(CommandAction::Model(arg.to_string())),
-        "model" => Some(CommandAction::ModelNoArg),
-        _ => None,
+        "model"                    => Some(CommandAction::ModelNoArg),
+        "provider" if !arg.is_empty() => Some(CommandAction::Provider(arg.to_string())),
+        "provider"                 => Some(CommandAction::ProviderNoArg),
+        _                          => None,
     }
 }

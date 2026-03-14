@@ -181,12 +181,12 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     if app.selection_mode {
         // Header row: title on the left, key hints on the right.
         const HINTS: &str = "↑↓ navigate   Enter select   Esc cancel  ";
-        const TITLE: &str = "  Select model  ";
+        let title = app.selection_title;
         let gap = width
-            .saturating_sub(TITLE.width() + HINTS.width());
+            .saturating_sub(title.width() + HINTS.width());
         let header_line = Line::from(vec![
             Span::styled(
-                TITLE,
+                title,
                 Style::default()
                     .fg(Color::White)
                     .bg(SELECTION_HEADER_BG)

@@ -5,7 +5,16 @@ use crate::{
     agent::{run_agent_loop, types::AgentEvent, AgentLoopConfig},
     commands::{self, CompletionItem},
     llm::{Message, Role, LlmProvider},
+    provider::ProviderKind,
 };
+
+// ── Selection result ──────────────────────────────────────────────────────────
+
+/// Value returned when the user confirms a choice in the selection menu.
+pub enum SelectionResult {
+    Model(String),
+    Provider(String),
+}
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -22,6 +31,8 @@ pub struct App {
     pub system_prompt: Option<String>,
     /// Currently active model name (mirrors the provider; updated on `/model`).
     pub current_model: String,
+    /// Currently active provider name (e.g. `"copilot"`).
+    pub current_provider: String,
     /// Agent loop configuration (tools, hooks, max_turns).
     pub agent_config: AgentLoopConfig,
 
@@ -37,9 +48,11 @@ pub struct App {
     /// True while a `list_models` task is in flight.
     pub models_loading: bool,
 
-    // ── Model selection menu ───────────────────────────────────────────────────
-    /// True when the full-screen model picker is active.
+    // ── Generic selection menu ────────────────────────────────────────────────
+    /// True when the full-screen selection picker is active.
     pub selection_mode: bool,
+    /// Header title shown in the selection menu.
+    pub selection_title: &'static str,
     /// Items shown in the selection menu.
     pub selection_items: Vec<CompletionItem>,
     /// Index of the currently highlighted selection row.
@@ -54,8 +67,15 @@ pub struct App {
     models_tx: tokio::sync::mpsc::UnboundedSender<Vec<String>>,
 }
 
+// Convenience alias used throughout this module.
+type DynProvider = Arc<dyn LlmProvider + Send + Sync + 'static>;
+
 impl App {
-    pub fn new(initial_model: impl Into<String>, agent_config: AgentLoopConfig) -> Self {
+    pub fn new(
+        initial_model: impl Into<String>,
+        initial_provider: &ProviderKind,
+        agent_config: AgentLoopConfig,
+    ) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (models_tx, models_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
@@ -67,12 +87,14 @@ impl App {
             streaming: false,
             system_prompt: None,
             current_model: initial_model.into(),
+            current_provider: initial_provider.name().to_string(),
             agent_config,
             completions: Vec::new(),
             completion_selected: 0,
             available_models: None,
             models_loading: false,
             selection_mode: false,
+            selection_title: "Select model",
             selection_items: Vec::new(),
             selection_selected: 0,
             event_rx,
@@ -122,8 +144,6 @@ impl App {
     }
 
     /// Returns true if a model-list fetch should be triggered now.
-    /// This is the case when the user has typed `/model ` but the list has
-    /// not been fetched yet and no fetch is currently in flight.
     pub fn should_fetch_models(&self) -> bool {
         if self.available_models.is_some() || self.models_loading {
             return false;
@@ -133,10 +153,7 @@ impl App {
     }
 
     /// Spawn a background task to fetch the model list from the provider.
-    pub fn start_model_fetch<P: LlmProvider + Send + Sync + 'static>(
-        &mut self,
-        provider: &Arc<P>,
-    ) {
+    pub fn start_model_fetch(&mut self, provider: &DynProvider) {
         self.models_loading = true;
         let future = provider.list_models();
         let tx = self.models_tx.clone();
@@ -151,18 +168,18 @@ impl App {
         self.available_models = Some(models);
         self.models_loading = false;
         self.update_completions();
-        // Populate (or refresh) the selection menu if it is currently shown.
+        // Populate (or refresh) the selection menu if it is currently showing models.
         if self.selection_mode {
-            self.selection_items = self
-                .available_models
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|m| commands::CompletionItem::from_model(m))
-                .collect();
-            // Keep the selected index in bounds.
-            if self.selection_selected >= self.selection_items.len() {
-                self.selection_selected = 0;
+            if let Some(ref all) = self.available_models.clone() {
+                let items: Vec<_> = all.iter()
+                    .map(|m| commands::CompletionItem::from_model(m))
+                    .collect();
+                if items.iter().any(|i| !i.loading) {
+                    self.selection_items = items;
+                    if self.selection_selected >= self.selection_items.len() {
+                        self.selection_selected = 0;
+                    }
+                }
             }
         }
     }
@@ -198,20 +215,30 @@ impl App {
 
     // ── Selection menu ────────────────────────────────────────────────────────
 
-    /// Enter the model selection menu, pre-populating items from the cache if
-    /// available or showing a loading indicator otherwise.
-    pub fn enter_selection_mode(&mut self) {
+    /// Open the model selection menu, pre-populating from cache or showing a
+    /// loading indicator when the list hasn't been fetched yet.
+    pub fn enter_model_selection_mode(&mut self) {
         self.reset_textarea();
         self.selection_mode = true;
+        self.selection_title = "  Select model  ";
         self.selection_selected = 0;
         self.selection_items = if let Some(models) = &self.available_models {
-            models
-                .iter()
-                .map(|m| commands::CompletionItem::from_model(m))
-                .collect()
+            models.iter().map(|m| CompletionItem::from_model(m)).collect()
         } else {
-            vec![commands::CompletionItem::loading_indicator()]
+            vec![CompletionItem::loading_indicator()]
         };
+    }
+
+    /// Open the provider selection menu with the fixed list of known providers.
+    pub fn enter_provider_selection_mode(&mut self) {
+        self.reset_textarea();
+        self.selection_mode = true;
+        self.selection_title = "  Select provider  ";
+        self.selection_selected = 0;
+        self.selection_items = ProviderKind::all()
+            .iter()
+            .map(|p| CompletionItem::from_provider(p.name(), p.label()))
+            .collect();
     }
 
     /// Dismiss the selection menu without applying a choice.
@@ -221,13 +248,16 @@ impl App {
         self.selection_selected = 0;
     }
 
-    /// Returns true when a model fetch should be triggered for the selection
-    /// menu (models not yet loaded, no fetch in flight).
+    /// Returns true when a model fetch should be triggered for the model
+    /// selection menu (models not yet loaded, no fetch in flight).
     pub fn should_fetch_models_for_selection(&self) -> bool {
-        self.selection_mode && self.available_models.is_none() && !self.models_loading
+        // Only fetch if the menu shows the loading indicator (model menu).
+        self.selection_mode
+            && self.selection_items.iter().any(|i| i.loading)
+            && !self.models_loading
     }
 
-    /// Navigate the selection menu down (wraps; skips loading rows).
+    /// Navigate the selection menu down (wraps around).
     pub fn selection_select_next(&mut self) {
         let len = self.selection_items.len();
         if len > 0 {
@@ -235,7 +265,7 @@ impl App {
         }
     }
 
-    /// Navigate the selection menu up (wraps; skips loading rows).
+    /// Navigate the selection menu up (wraps around).
     pub fn selection_select_prev(&mut self) {
         let len = self.selection_items.len();
         if len > 0 {
@@ -244,16 +274,22 @@ impl App {
     }
 
     /// Confirm the currently highlighted selection.
-    /// Returns the chosen model name, or `None` if the row is a loading
-    /// indicator or no valid item is highlighted.
-    pub fn apply_selection(&mut self) -> Option<String> {
+    /// Parses the `complete_to` string to tell model choices from provider
+    /// choices apart, so both can share the same UI widget.
+    pub fn apply_selection(&mut self) -> Option<SelectionResult> {
         let item = self.selection_items.get(self.selection_selected)?;
-        if item.loading || item.label.is_empty() {
+        if item.loading || item.complete_to.is_empty() {
             return None;
         }
-        let model = item.label.clone();
+        let result = if let Some(name) = item.complete_to.strip_prefix("/provider ") {
+            SelectionResult::Provider(name.to_string())
+        } else if let Some(name) = item.complete_to.strip_prefix("/model ") {
+            SelectionResult::Model(name.to_string())
+        } else {
+            return None;
+        };
         self.exit_selection_mode();
-        Some(model)
+        Some(result)
     }
 
     // ── Conversation management ───────────────────────────────────────────────
@@ -268,7 +304,7 @@ impl App {
     // ── LLM submission ────────────────────────────────────────────────────────
 
     /// Take the textarea content and start the agent loop.
-    pub fn submit<P: LlmProvider + Send + Sync + 'static>(&mut self, provider: &Arc<P>) {
+    pub fn submit(&mut self, provider: &DynProvider) {
         let lines: Vec<String> = self.textarea.lines().to_vec();
         let text = lines.join("\n");
         let trimmed = text.trim().to_string();
@@ -281,7 +317,6 @@ impl App {
         self.auto_scroll = true;
         self.streaming = true;
 
-        // Build the LLM history: system prompt (if any) + all display messages.
         let mut llm_messages: Vec<Message> = self
             .system_prompt
             .iter()
@@ -289,8 +324,6 @@ impl App {
             .chain(self.messages.iter().cloned())
             .collect();
 
-        // The agent loop manages assistant/tool messages internally;
-        // strip any trailing assistant placeholder that might exist.
         if matches!(llm_messages.last().map(|m| &m.role), Some(Role::Assistant))
             && llm_messages.last().map(|m| m.content.is_empty()).unwrap_or(false)
         {
@@ -352,9 +385,7 @@ impl App {
             AgentEvent::ToolCallEnd { name, result } => {
                 self.messages.push(Message::tool_result(&name, result.content, result.is_error));
             }
-            AgentEvent::TurnEnd => {
-                // Reserved for future use (e.g. visual separator between turns).
-            }
+            AgentEvent::TurnEnd => {}
             AgentEvent::Done => {
                 self.streaming = false;
             }
@@ -365,8 +396,6 @@ impl App {
         }
     }
 
-    /// Ensure the last message is an (possibly empty) assistant message.
-    /// Pushes a new one if the last message is not an assistant message.
     fn ensure_assistant_message(&mut self) {
         match self.messages.last().map(|m| &m.role) {
             Some(Role::Assistant) => {}

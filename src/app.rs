@@ -1,7 +1,10 @@
 use std::sync::Arc;
-use tui_textarea::TextArea;
+use tui_textarea::{CursorMove, TextArea};
 
-use crate::llm::{LlmEvent, LlmProvider, Message, Role};
+use crate::{
+    commands::{self, SlashCommand},
+    llm::{LlmEvent, LlmProvider, Message, Role},
+};
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -17,13 +20,19 @@ pub struct App {
     pub streaming: bool,
     /// Optional system prompt prepended to every request.
     pub system_prompt: Option<String>,
+    /// Currently active model name (mirrors the provider; updated on `/model`).
+    pub current_model: String,
+    /// Commands matching the current slash-command prefix (empty = popup hidden).
+    pub slash_completions: Vec<&'static SlashCommand>,
+    /// Highlighted index in the completion popup.
+    pub slash_selected: usize,
     /// Receives LlmEvents forwarded from the active streaming task.
     pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<LlmEvent>,
     event_tx: tokio::sync::mpsc::UnboundedSender<LlmEvent>,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(initial_model: impl Into<String>) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             messages: Vec::new(),
@@ -33,6 +42,9 @@ impl App {
             last_log_height: 0,
             streaming: false,
             system_prompt: None,
+            current_model: initial_model.into(),
+            slash_completions: Vec::new(),
+            slash_selected: 0,
             event_rx,
             event_tx,
         }
@@ -44,9 +56,80 @@ impl App {
     }
 
     /// Reset the input area to a blank state between submissions.
+    /// Also clears any active slash-completion state.
     pub fn reset_textarea(&mut self) {
         self.textarea = Self::make_textarea();
+        self.slash_completions.clear();
+        self.slash_selected = 0;
     }
+
+    /// True when the input is a single line beginning with `/`.
+    /// Used to decide whether to submit to the LLM or handle as a command.
+    pub fn in_slash_mode(&self) -> bool {
+        let lines = self.textarea.lines();
+        lines.len() == 1 && lines[0].trim_start().starts_with('/')
+    }
+
+    // ── Slash-completion helpers ──────────────────────────────────────────────
+
+    /// Recompute `slash_completions` from the current textarea content.
+    /// Call this after every keystroke that may change the input.
+    pub fn update_slash_state(&mut self) {
+        let lines = self.textarea.lines().to_vec();
+        let input = if lines.len() == 1 {
+            lines[0].trim().to_string()
+        } else {
+            String::new()
+        };
+        let new_completions = commands::completions_for(&input);
+        // Reset selection to 0 whenever the candidate list changes length.
+        if new_completions.len() != self.slash_completions.len() {
+            self.slash_selected = 0;
+        }
+        self.slash_completions = new_completions;
+    }
+
+    /// Move the highlighted completion down (wraps around).
+    pub fn slash_select_next(&mut self) {
+        let len = self.slash_completions.len();
+        if len > 0 {
+            self.slash_selected = (self.slash_selected + 1) % len;
+        }
+    }
+
+    /// Move the highlighted completion up (wraps around).
+    pub fn slash_select_prev(&mut self) {
+        let len = self.slash_completions.len();
+        if len > 0 {
+            self.slash_selected = (self.slash_selected + len - 1) % len;
+        }
+    }
+
+    /// Replace the textarea content with the selected command's usage stub
+    /// and move the cursor to the end of the line.
+    pub fn slash_complete(&mut self) {
+        if let Some(cmd) = self.slash_completions.get(self.slash_selected) {
+            let text = if cmd.takes_arg {
+                format!("/{} ", cmd.name)
+            } else {
+                format!("/{}", cmd.name)
+            };
+            self.textarea = TextArea::new(vec![text]);
+            self.textarea.move_cursor(CursorMove::End);
+            self.update_slash_state();
+        }
+    }
+
+    // ── Conversation management ───────────────────────────────────────────────
+
+    /// Clear the conversation history and reset the input area.
+    pub fn new_conversation(&mut self) {
+        self.messages.clear();
+        self.reset_textarea();
+        self.auto_scroll = true;
+    }
+
+    // ── LLM submission ────────────────────────────────────────────────────────
 
     /// Take the textarea content and start an LLM streaming request.
     pub fn submit<P: LlmProvider + Send + Sync + 'static>(&mut self, provider: &Arc<P>) {
@@ -97,6 +180,8 @@ impl App {
         });
     }
 
+    // ── Scrolling ─────────────────────────────────────────────────────────────
+
     /// Scroll up by one page. Disables auto-scroll.
     pub fn scroll_up(&mut self) {
         self.scroll_up_lines(self.last_log_height.max(1));
@@ -118,6 +203,8 @@ impl App {
     pub fn scroll_down(&mut self) {
         self.auto_scroll = true;
     }
+
+    // ── LLM event handling ────────────────────────────────────────────────────
 
     /// Apply a single LLM event to the application state.
     pub fn apply_event(&mut self, ev: LlmEvent) {

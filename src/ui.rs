@@ -6,13 +6,25 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::{app::App, llm::Role};
+use crate::{app::App, commands::SlashCommand, llm::Role};
 
 /// Background colour of the input panel.
 const INPUT_BG: Color = Color::Rgb(30, 30, 40);
 
 /// Background colour of user message blocks in the chat log.
 const USER_BG: Color = Color::Rgb(50, 50, 60);
+
+/// Background colour of the completion popup (unselected rows).
+const COMPLETION_BG: Color = Color::Rgb(22, 22, 38);
+
+/// Background colour of the selected completion row.
+const COMPLETION_SEL_BG: Color = Color::Rgb(55, 55, 100);
+
+/// Foreground colour for the command usage column in the popup.
+const COMPLETION_CMD_FG: Color = Color::Rgb(120, 200, 255);
+
+/// Foreground colour for the description column in the popup.
+const COMPLETION_DESC_FG: Color = Color::Rgb(140, 140, 160);
 
 /// Apply visual styles to the textarea at render time.
 /// The textarea itself is owned by `App` with no styling baked in;
@@ -28,9 +40,8 @@ fn style_textarea(app: &mut App) {
     );
     app.textarea
         .set_style(Style::default().fg(Color::White).bg(INPUT_BG));
-    // Highlight the active cursor line with a slightly brighter shade.
     app.textarea
-        .set_cursor_line_style(Style::default().bg(Color::Rgb(50, 50, 65)));
+        .set_cursor_line_style(Style::default().bg(INPUT_BG));
 }
 
 /// Render a full-width row of halfblock characters in `color` so that a
@@ -50,26 +61,32 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     style_textarea(app);
 
     let terminal_height = f.area().height as usize;
+    let width = f.area().width as usize;
 
     let input_line_count = app.textarea.lines().len().max(1);
     let max_input_height = (terminal_height * 40 / 100).max(1);
     let input_height = input_line_count.min(max_input_height) as u16;
 
-    // Layout: chat log | top halfblock | input | bottom halfblock
+    // Completion popup: one row per matching command (0 when no completions).
+    let completion_height = app.slash_completions.len() as u16;
+
+    // Layout: chat log | completion popup | top halfblock | input | bottom halfblock
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),
-            Constraint::Length(1),             // ▄  top edge of input panel
-            Constraint::Length(input_height),  // input textarea
-            Constraint::Length(1),             // ▀  bottom edge of input panel
+            Constraint::Min(1),                    // 0: chat log
+            Constraint::Length(completion_height), // 1: completion popup
+            Constraint::Length(1),                 // 2: ▄ top edge of input panel
+            Constraint::Length(input_height),      // 3: input textarea
+            Constraint::Length(1),                 // 4: ▀ bottom edge of input panel
         ])
         .split(f.area());
 
-    let log_area    = chunks[0];
-    let top_hb_area = chunks[1];
-    let input_area  = chunks[2];
-    let bot_hb_area = chunks[3];
+    let log_area        = chunks[0];
+    let completion_area = chunks[1];
+    let top_hb_area     = chunks[2];
+    let input_area      = chunks[3];
+    let bot_hb_area     = chunks[4];
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
@@ -117,9 +134,17 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         );
     }
 
-    // ── Halfblock edges ───────────────────────────────────────────────────────
-    let width = f.area().width as usize;
+    // ── Completion popup ──────────────────────────────────────────────────────
+    if completion_height > 0 {
+        let popup_lines = build_completion_lines(
+            &app.slash_completions,
+            app.slash_selected,
+            width,
+        );
+        f.render_widget(Paragraph::new(popup_lines), completion_area);
+    }
 
+    // ── Halfblock edges ───────────────────────────────────────────────────────
     f.render_widget(
         Paragraph::new(halfblock_line(width, '▄', INPUT_BG)),
         top_hb_area,
@@ -131,6 +156,48 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     // ── Input box ─────────────────────────────────────────────────────────────
     f.render_widget(&app.textarea, input_area);
+}
+
+// ── Completion popup rendering ────────────────────────────────────────────────
+
+/// Build one `Line` per matching command for the completion popup.
+///
+/// Layout per row:  `  <usage padded>  —  <description> <fill>`
+fn build_completion_lines(
+    completions: &[&SlashCommand],
+    selected: usize,
+    terminal_width: usize,
+) -> Vec<Line<'static>> {
+    // Align descriptions by padding usage to the longest usage string.
+    let usage_col = completions
+        .iter()
+        .map(|c| c.usage.len())
+        .max()
+        .unwrap_or(0)
+        .max(8); // minimum column width
+
+    const SEP: &str = "  —  ";
+    const INDENT: &str = "  "; // left indent
+
+    completions
+        .iter()
+        .enumerate()
+        .map(|(i, cmd)| {
+            let bg = if i == selected { COMPLETION_SEL_BG } else { COMPLETION_BG };
+            let usage_padded = format!("{:<width$}", cmd.usage, width = usage_col);
+            let desc = cmd.description;
+            let used = INDENT.len() + usage_col + SEP.len() + desc.len();
+            let fill = " ".repeat(terminal_width.saturating_sub(used));
+
+            Line::from(vec![
+                Span::styled(INDENT, Style::default().bg(bg)),
+                Span::styled(usage_padded, Style::default().fg(COMPLETION_CMD_FG).bg(bg)),
+                Span::styled(SEP, Style::default().fg(Color::DarkGray).bg(bg)),
+                Span::styled(desc.to_string(), Style::default().fg(COMPLETION_DESC_FG).bg(bg)),
+                Span::styled(fill, Style::default().bg(bg)),
+            ])
+        })
+        .collect()
 }
 
 // ── Line building + pre-wrapping ─────────────────────────────────────────────

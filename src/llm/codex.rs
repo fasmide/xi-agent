@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use futures_util::StreamExt;
@@ -164,20 +163,18 @@ impl CodexProvider {
                     match ev_type {
                         // ── Text token ────────────────────────────────────────
                         "response.output_text.delta" => {
-                            if let Some(delta) = ev["delta"].as_str() {
-                                if !delta.is_empty() {
+                            if let Some(delta) = ev["delta"].as_str()
+                                && !delta.is_empty() {
                                     yield LlmEvent::Token(delta.to_string());
                                 }
-                            }
                         }
 
                         // ── Thinking / reasoning token ────────────────────────
                         "response.reasoning_summary_text.delta" => {
-                            if let Some(delta) = ev["delta"].as_str() {
-                                if !delta.is_empty() {
+                            if let Some(delta) = ev["delta"].as_str()
+                                && !delta.is_empty() {
                                     yield LlmEvent::ThinkingToken(delta.to_string());
                                 }
-                            }
                         }
 
                         // ── Function call started ─────────────────────────────
@@ -201,13 +198,11 @@ impl CodexProvider {
                                 if let Some(delta) = ev["delta"].as_str() {
                                     call.arguments.push_str(delta);
                                 }
-                            } else if let Some(ref id) = current_call_item_id.clone() {
-                                if let Some(call) = pending_calls.get_mut(id) {
-                                    if let Some(delta) = ev["delta"].as_str() {
+                            } else if let Some(ref id) = current_call_item_id.clone()
+                                && let Some(call) = pending_calls.get_mut(id)
+                                    && let Some(delta) = ev["delta"].as_str() {
                                         call.arguments.push_str(delta);
                                     }
-                                }
-                            }
                         }
 
                         // ── Item completed ────────────────────────────────────

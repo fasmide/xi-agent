@@ -186,8 +186,8 @@ impl App {
         self.models_loading = false;
         self.update_completions();
         // Populate (or refresh) the selection menu if it is currently showing models.
-        if self.selection_mode {
-            if let Some(ref all) = self.available_models.clone() {
+        if self.selection_mode
+            && let Some(ref all) = self.available_models.clone() {
                 let items: Vec<_> = all.iter()
                     .map(|m| commands::CompletionItem::from_model(m))
                     .collect();
@@ -198,7 +198,6 @@ impl App {
                     }
                 }
             }
-        }
     }
 
     /// Navigate the completion selection down (wraps around).
@@ -356,7 +355,7 @@ impl App {
         let mut llm_messages: Vec<Message> = self
             .system_prompt
             .iter()
-            .map(|s| Message::system(s))
+            .map(Message::system)
             .chain(self.messages.iter().cloned())
             .collect();
 

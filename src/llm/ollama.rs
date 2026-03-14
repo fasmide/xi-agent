@@ -124,11 +124,10 @@ struct ToolCallFunction {
 /// (e.g. `"{\"path\":\".\"}"`), parse that string into an object.
 /// Returns the value unchanged if it is already an object or array.
 fn coerce_arguments(v: serde_json::Value) -> serde_json::Value {
-    if let serde_json::Value::String(s) = &v {
-        if let Ok(parsed) = serde_json::from_str(s) {
+    if let serde_json::Value::String(s) = &v
+        && let Ok(parsed) = serde_json::from_str(s) {
             return parsed;
         }
-    }
     v
 }
 #[derive(Deserialize)]
@@ -301,11 +300,10 @@ impl LlmProvider for OllamaProvider {
                 stream: true,
             };
 
-            if debug {
-                if let Ok(json) = serde_json::to_string_pretty(&body) {
+            if debug
+                && let Ok(json) = serde_json::to_string_pretty(&body) {
                     eprintln!("[PIRS_DEBUG] → request:\n{json}");
                 }
-            }
 
             let response = match client
                 .post(&url)

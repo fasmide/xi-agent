@@ -106,7 +106,7 @@ impl Tool for FindTool {
                     };
 
                     // Skip directory entries themselves; we only report files.
-                    if entry.file_type().map_or(false, |t| t.is_dir()) {
+                    if entry.file_type().is_some_and(|t| t.is_dir()) {
                         continue;
                     }
 

@@ -353,7 +353,7 @@ async fn run_print_mode(
         .unwrap_or_else(|| current_kind.default_model().to_string());
 
     let provider = build_provider(&current_kind, &current_model).map_err(|e| {
-        io::Error::new(io::ErrorKind::Other, format!("provider error: {e}"))
+        io::Error::other(format!("provider error: {e}"))
     })?;
 
     let tools = register_builtin_tools();

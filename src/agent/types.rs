@@ -67,16 +67,22 @@ pub enum AgentEvent {
 
 // ── Agent loop configuration ──────────────────────────────────────────────────
 
+/// Hook called before each tool execution. Return `false` to block the call.
+pub type BeforeToolCall = Box<dyn Fn(&str, &serde_json::Value) -> bool + Send + Sync>;
+
+/// Hook called after each tool execution. Return `Some(result)` to override.
+pub type AfterToolCall = Box<dyn Fn(&str, &ToolResult) -> Option<ToolResult> + Send + Sync>;
+
 /// Configuration passed to `run_agent_loop`.
 pub struct AgentLoopConfig {
     /// Tools available to the model.
     pub tools: ToolRegistry,
     /// Optional hook called before each tool execution.
     /// Return `false` to block the tool call (an error result is returned instead).
-    pub before_tool_call: Option<Box<dyn Fn(&str, &serde_json::Value) -> bool + Send + Sync>>,
+    pub before_tool_call: Option<BeforeToolCall>,
     /// Optional hook called after each tool execution.
     /// Return `Some(result)` to override the tool's result.
-    pub after_tool_call: Option<Box<dyn Fn(&str, &ToolResult) -> Option<ToolResult> + Send + Sync>>,
+    pub after_tool_call: Option<AfterToolCall>,
     /// Maximum number of LLM turns before the loop stops with an error.
     pub max_turns: usize,
 }

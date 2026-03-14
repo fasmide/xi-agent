@@ -42,13 +42,13 @@ impl OpenAiProvider {
     /// Build from environment variables, named presets, and/or auth.json.
     ///
     /// Resolution order:
-    ///   - `PIRS_PRESET`   selects a named preset (openrouter, groq) which
-    ///                     sets the default base URL and the API-key env var.
-    ///   - `OPENAI_BASE_URL` overrides the preset base URL.
-    ///   - `OPENAI_MODEL`    overrides the default model (gpt-4o).
-    ///   - Preset key env var (e.g. `OPENROUTER_API_KEY`) is tried first,
-    ///     then `OPENAI_API_KEY`, then `openai-codex.access` from
-    ///     `~/.pi/agent/auth.json`.
+    /// - `PIRS_PRESET` selects a named preset (openrouter, groq) which
+    ///   sets the default base URL and the API-key env var.
+    /// - `OPENAI_BASE_URL` overrides the preset base URL.
+    /// - `OPENAI_MODEL`    overrides the default model (gpt-4o).
+    /// - Preset key env var (e.g. `OPENROUTER_API_KEY`) is tried first,
+    ///   then `OPENAI_API_KEY`, then `openai-codex.access` from
+    ///   `~/.pi/agent/auth.json`.
     pub fn from_env() -> anyhow::Result<Self> {
         let preset = std::env::var("PIRS_PRESET").unwrap_or_default();
 
@@ -110,11 +110,10 @@ impl OpenAiProvider {
                 },
             };
 
-            if debug {
-                if let Ok(json) = serde_json::to_string_pretty(&body) {
+            if debug
+                && let Ok(json) = serde_json::to_string_pretty(&body) {
                     eprintln!("[PIRS_DEBUG] → request:\n{json}");
                 }
-            }
 
             let mut req = client
                 .post(&url)
@@ -210,17 +209,16 @@ impl OpenAiProvider {
                         let delta = choice.delta;
 
                         // Text tokens.
-                        if let Some(content) = delta.content {
-                            if !content.is_empty() {
+                        if let Some(content) = delta.content
+                            && !content.is_empty() {
                                 yield LlmEvent::Token(content);
                             }
-                        }
 
                         // Tool-call delta fragments — merge into accumulator.
                         for tc_delta in delta.tool_calls {
                             let entry = tool_calls
                                 .entry(tc_delta.index)
-                                .or_insert_with(PartialToolCall::default);
+                                .or_default();
                             if let Some(id) = tc_delta.id {
                                 entry.id = Some(id);
                             }

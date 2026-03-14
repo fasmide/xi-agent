@@ -52,15 +52,13 @@ impl Tool for WriteTool {
             };
 
             // Create parent directories if needed.
-            if let Some(parent) = std::path::Path::new(&path).parent() {
-                if !parent.as_os_str().is_empty() {
-                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
+            if let Some(parent) = std::path::Path::new(&path).parent()
+                && !parent.as_os_str().is_empty()
+                    && let Err(e) = tokio::fs::create_dir_all(parent).await {
                         return ToolResult::err(format!(
                             "Failed to create directories for {path}: {e}"
                         ));
                     }
-                }
-            }
 
             if let Err(e) = tokio::fs::write(&path, content.as_bytes()).await {
                 return ToolResult::err(format!("Failed to write {path}: {e}"));

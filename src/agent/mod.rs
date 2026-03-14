@@ -112,11 +112,10 @@ pub async fn run_agent_loop(
             };
 
             // after_tool_call hook
-            if let Some(f) = &config.after_tool_call {
-                if let Some(override_result) = f(&name, &result) {
+            if let Some(f) = &config.after_tool_call
+                && let Some(override_result) = f(&name, &result) {
                     result = override_result;
                 }
-            }
 
             let _ = tx.send(AgentEvent::ToolCallEnd {
                 id: id.clone(),

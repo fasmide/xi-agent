@@ -187,8 +187,8 @@ impl App {
             return;
         }
 
-        self.messages.push(Message { role: Role::User, content: trimmed });
-        self.messages.push(Message { role: Role::Assistant, content: String::new() });
+        self.messages.push(Message { role: Role::User, content: trimmed, thinking: None });
+        self.messages.push(Message { role: Role::Assistant, content: String::new(), thinking: None });
 
         self.reset_textarea();
         self.auto_scroll = true;
@@ -197,7 +197,7 @@ impl App {
         let history: Vec<Message> = self
             .system_prompt
             .iter()
-            .map(|s| Message { role: Role::System, content: s.clone() })
+            .map(|s| Message { role: Role::System, content: s.clone(), thinking: None })
             .chain(self.messages[..self.messages.len() - 1].iter().cloned())
             .collect();
 
@@ -238,6 +238,11 @@ impl App {
 
     pub fn apply_event(&mut self, ev: LlmEvent) {
         match ev {
+            LlmEvent::ThinkingToken(token) => {
+                if let Some(last) = self.messages.last_mut() {
+                    last.thinking.get_or_insert_with(String::new).push_str(&token);
+                }
+            }
             LlmEvent::Token(token) => {
                 if let Some(last) = self.messages.last_mut() {
                     last.content.push_str(&token);

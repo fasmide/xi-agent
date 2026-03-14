@@ -5,6 +5,9 @@ use std::{future::Future, pin::Pin};
 pub struct Message {
     pub role: Role,
     pub content: String,
+    /// Chain-of-thought / "thinking" content emitted before the answer.
+    /// `None` for messages that carry no thinking output.
+    pub thinking: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -27,7 +30,9 @@ impl Role {
 /// Events emitted by a streaming LLM response.
 #[derive(Debug)]
 pub enum LlmEvent {
-    /// A token chunk from the model.
+    /// A token chunk from the model's thinking / chain-of-thought block.
+    ThinkingToken(String),
+    /// A token chunk from the model's answer.
     Token(String),
     /// The stream finished successfully.
     Done,

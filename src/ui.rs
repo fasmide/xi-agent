@@ -250,22 +250,68 @@ fn build_log_lines(
                 // System messages are not displayed in the chat log.
             }
             Role::Assistant => {
-                let content = if streaming && is_last && msg.content.is_empty() {
+                let thinking = msg.thinking.as_deref().unwrap_or("");
+                let is_streaming_last = streaming && is_last;
+
+                // Render thinking block (if any thinking content has arrived).
+                if !thinking.is_empty() {
+                    append_message_dim(&mut lines, thinking, "", width);
+                    // Blank line separator between thinking and answer.
+                    lines.push(Line::default());
+                }
+
+                // Render the answer. Show the streaming cursor (▋) at the end
+                // of the answer area whenever this is the active streaming message.
+                // If no answer text has arrived yet, render just the cursor.
+                let content = if is_streaming_last && msg.content.is_empty() {
                     "▋".to_string()
                 } else {
                     msg.content.clone()
                 };
-                let suffix = if streaming && is_last && !msg.content.is_empty() {
-                    "▋"
-                } else {
-                    ""
-                };
+                let suffix = if is_streaming_last && !msg.content.is_empty() { "▋" } else { "" };
                 append_message(&mut lines, &content, suffix, width, false);
             }
         }
     }
 
     lines
+}
+
+/// Append pre-wrapped dim (thinking) lines for one block.
+/// Same wrapping logic as `append_message` but renders in `DarkGray`.
+fn append_message_dim(
+    out: &mut Vec<Line<'static>>,
+    content: &str,
+    suffix: &'static str,
+    width: usize,
+) {
+    let dim_style = Style::default().fg(Color::DarkGray);
+
+    let segments: Vec<&str> = if content.is_empty() {
+        vec![""]
+    } else {
+        content.split('\n').collect()
+    };
+
+    let last_seg = segments.len() - 1;
+
+    for (seg_idx, segment) in segments.iter().enumerate() {
+        let is_last_seg = seg_idx == last_seg;
+        let chunks = wrap_str(segment, width);
+        let last_chunk = chunks.len() - 1;
+
+        for (chunk_idx, chunk) in chunks.iter().enumerate() {
+            let is_last_chunk = chunk_idx == last_chunk;
+            let show_suffix = !suffix.is_empty() && is_last_seg && is_last_chunk;
+
+            let mut spans: Vec<Span<'static>> =
+                vec![Span::styled(chunk.clone(), dim_style)];
+            if show_suffix {
+                spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
+            }
+            out.push(Line::from(spans));
+        }
+    }
 }
 
 /// Append pre-wrapped visual lines for one message to `out`.

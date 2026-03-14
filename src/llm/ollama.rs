@@ -298,10 +298,7 @@ impl LlmProvider for OllamaProvider {
                 model,
                 messages: messages.iter().map(to_ollama_message).collect(),
                 tools: ollama_tools,
-                // stream: false so that tool_calls are guaranteed to arrive
-                // in a single, complete JSON object. Many Ollama models do not
-                // reliably emit tool_calls in the NDJSON stream.
-                stream: false,
+                stream: true,
             };
 
             if debug {
@@ -331,40 +328,28 @@ impl LlmProvider for OllamaProvider {
                 return;
             }
 
-            let text = match response.text().await {
-                Ok(t) => t,
-                Err(e) => { yield LlmEvent::Error(e.to_string()); return; }
-            };
-
-            if debug {
-                eprintln!("[PIRS_DEBUG] ← response:\n{text}");
-            }
-
-            let chunk: ChatChunk = match serde_json::from_str(&text) {
-                Ok(c) => c,
-                Err(e) => {
-                    yield LlmEvent::Error(format!("Parse error: {e}\nBody: {text}"));
-                    return;
-                }
-            };
-
-            if !chunk.message.tool_calls.is_empty() {
-                for (i, tc) in chunk.message.tool_calls.iter().enumerate() {
-                    yield LlmEvent::ToolCall {
-                        id: format!("call_{i}"),
-                        name: tc.function.name.clone(),
-                        args: coerce_arguments(tc.function.arguments.clone()),
-                    };
-                }
-            } else {
-                if !chunk.message.thinking.is_empty() {
-                    yield LlmEvent::ThinkingToken(chunk.message.thinking.clone());
-                }
-                if !chunk.message.content.is_empty() {
-                    yield LlmEvent::Token(chunk.message.content.clone());
+            let mut byte_stream = response.bytes_stream();
+            let mut buf = String::new();
+            let mut line_num = 0usize;
+            while let Some(chunk) = byte_stream.next().await {
+                let bytes = match chunk {
+                    Ok(b) => b,
+                    Err(e) => { yield LlmEvent::Error(e.to_string()); return; }
+                };
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim().to_string();
+                    buf.drain(..=pos);
+                    if debug && !line.is_empty() {
+                        eprintln!("[PIRS_DEBUG] ← chunk {line_num}: {line}");
+                        line_num += 1;
+                    }
+                    let mut events = Vec::new();
+                    let done = parse_ndjson_line(&line, &mut events);
+                    for ev in events { yield ev; }
+                    if done { return; }
                 }
             }
-            yield LlmEvent::Done;
         })
     }
 

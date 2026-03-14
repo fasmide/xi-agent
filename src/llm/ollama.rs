@@ -43,6 +43,8 @@ struct ChatRequest {
 struct OllamaMessage {
     role: &'static str,
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -54,7 +56,10 @@ struct ChatChunk {
 
 #[derive(Deserialize)]
 struct ChunkMessage {
+    #[serde(default)]
     content: String,
+    #[serde(default)]
+    thinking: String,
 }
 
 // Serde types for the Ollama /api/tags endpoint.
@@ -68,41 +73,18 @@ struct TagModel {
     name: String,
 }
 
-// ── <think> tag parser ────────────────────────────────────────────────────────
+// ── History serialisation ─────────────────────────────────────────────────────
 
-/// Build the Ollama message content for a past assistant message.
-/// If the message has associated thinking content, re-wrap it in
-/// `<think>…</think>` so that reasoning models see their prior chain of
-/// thought in multi-turn conversations.
-fn ollama_content(msg: &Message) -> String {
-    match &msg.thinking {
-        Some(thinking) if !thinking.is_empty() => {
-            format!("<think>{}</think>{}", thinking, msg.content)
-        }
-        _ => msg.content.clone(),
+/// Build the Ollama message for a past assistant turn.
+/// If the message has associated thinking content, pass it in the `thinking`
+/// field so reasoning models see their prior chain of thought in multi-turn
+/// conversations.
+fn to_ollama_message(msg: &Message) -> OllamaMessage {
+    OllamaMessage {
+        role: msg.role.as_str(),
+        content: msg.content.clone(),
+        thinking: msg.thinking.clone().filter(|t| !t.is_empty()),
     }
-}
-
-/// Two-state parser for `<think>…</think>` blocks.
-#[derive(Clone, Copy, PartialEq)]
-enum ParseState {
-    /// Currently emitting normal response tokens.
-    Responding,
-    /// Currently inside a `<think>…</think>` block.
-    Thinking,
-}
-
-/// Return the largest byte offset ≤ `index` that falls on a UTF-8 character
-/// boundary in `s`.
-fn floor_char_boundary(s: &str, index: usize) -> usize {
-    if index >= s.len() {
-        return s.len();
-    }
-    let mut i = index;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
 }
 
 // ── Provider implementation ───────────────────────────────────────────────────
@@ -116,13 +98,7 @@ impl LlmProvider for OllamaProvider {
         Box::pin(async_stream::stream! {
             let body = ChatRequest {
                 model,
-                messages: messages
-                    .iter()
-                    .map(|m| OllamaMessage {
-                        role: m.role.as_str(),
-                        content: ollama_content(m),
-                    })
-                    .collect(),
+                messages: messages.iter().map(to_ollama_message).collect(),
                 stream: true,
             };
 
@@ -151,13 +127,6 @@ impl LlmProvider for OllamaProvider {
 
             // Ollama streams NDJSON: one JSON object per line.
             let mut buf = String::new();
-
-            // Think-tag parser state.
-            let mut parse_state = ParseState::Responding;
-            // Holds raw text that might be the start of a `<think>` or
-            // `</think>` tag spanning a chunk boundary.
-            let mut text_buf = String::new();
-
             while let Some(chunk) = byte_stream.next().await {
                 let bytes = match chunk.context("Error reading stream chunk") {
                     Ok(b) => b,
@@ -177,92 +146,28 @@ impl LlmProvider for OllamaProvider {
                         continue;
                     }
 
-                    let chunk = match serde_json::from_str::<ChatChunk>(&line) {
-                        Ok(c) => c,
+                    match serde_json::from_str::<ChatChunk>(&line) {
+                        Ok(chunk) => {
+                            if !chunk.message.thinking.is_empty() {
+                                yield LlmEvent::ThinkingToken(chunk.message.thinking);
+                            }
+                            if !chunk.message.content.is_empty() {
+                                yield LlmEvent::Token(chunk.message.content);
+                            }
+                            if chunk.done {
+                                yield LlmEvent::Done;
+                                return;
+                            }
+                        }
                         Err(e) => {
                             yield LlmEvent::Error(format!("Parse error: {e}"));
                             return;
                         }
-                    };
-
-                    if !chunk.message.content.is_empty() {
-                        text_buf.push_str(&chunk.message.content);
-
-                        // Flush all complete tag-delimited regions from text_buf.
-                        'flush: loop {
-                            let tag = if parse_state == ParseState::Responding {
-                                "<think>"
-                            } else {
-                                "</think>"
-                            };
-
-                            if let Some(pos) = text_buf.find(tag) {
-                                // Emit everything before the tag.
-                                if pos > 0 {
-                                    let text = text_buf[..pos].to_string();
-                                    text_buf.drain(..pos);
-                                    if parse_state == ParseState::Responding {
-                                        yield LlmEvent::Token(text);
-                                    } else {
-                                        yield LlmEvent::ThinkingToken(text);
-                                    }
-                                }
-                                // Consume the tag itself.
-                                text_buf.drain(..tag.len());
-                                parse_state = match parse_state {
-                                    ParseState::Responding => ParseState::Thinking,
-                                    ParseState::Thinking  => ParseState::Responding,
-                                };
-                                // Loop again — there may be another tag.
-                            } else {
-                                // No complete tag. Hold back enough bytes to
-                                // handle a tag that straddles this boundary.
-                                let hold = tag.len() - 1;
-                                if text_buf.len() > hold {
-                                    let emit_len = floor_char_boundary(
-                                        &text_buf,
-                                        text_buf.len() - hold,
-                                    );
-                                    if emit_len > 0 {
-                                        let text = text_buf[..emit_len].to_string();
-                                        text_buf.drain(..emit_len);
-                                        if parse_state == ParseState::Responding {
-                                            yield LlmEvent::Token(text);
-                                        } else {
-                                            yield LlmEvent::ThinkingToken(text);
-                                        }
-                                    }
-                                }
-                                break 'flush;
-                            }
-                        }
-                    }
-
-                    if chunk.done {
-                        // Flush any remaining buffered text.
-                        if !text_buf.is_empty() {
-                            let text = std::mem::take(&mut text_buf);
-                            if parse_state == ParseState::Responding {
-                                yield LlmEvent::Token(text);
-                            } else {
-                                yield LlmEvent::ThinkingToken(text);
-                            }
-                        }
-                        yield LlmEvent::Done;
-                        return;
                     }
                 }
             }
 
-            // Stream ended without a done=true — flush and finish.
-            if !text_buf.is_empty() {
-                let text = std::mem::take(&mut text_buf);
-                if parse_state == ParseState::Responding {
-                    yield LlmEvent::Token(text);
-                } else {
-                    yield LlmEvent::ThinkingToken(text);
-                }
-            }
+            // Stream ended without done=true.
             yield LlmEvent::Done;
         })
     }

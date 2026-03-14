@@ -20,20 +20,21 @@ mod ui;
 use app::App;
 use agent::{build_system_prompt, tools::register_builtin_tools, AgentLoopConfig};
 use commands::CommandAction;
-use llm::{openai::OpenAiProvider, LlmProvider};
+use llm::{copilot, LlmProvider};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let base_provider = match OpenAiProvider::from_env() {
+    let base_provider = match copilot::from_env() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("pirs: failed to initialise OpenAI provider: {e}");
+            eprintln!("pirs: failed to initialise Copilot provider: {e}");
             std::process::exit(1);
         }
     };
-    let mut current_model = std::env::var("OPENAI_MODEL")
+    let mut current_model = std::env::var("COPILOT_MODEL")
+        .or_else(|_| std::env::var("OPENAI_MODEL"))
         .unwrap_or_else(|_| "gpt-4o".to_string());
 
     enable_raw_mode()?;

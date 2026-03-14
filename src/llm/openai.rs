@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use futures_util::StreamExt;
@@ -9,6 +11,7 @@ pub struct OpenAiProvider {
     base_url: String,
     model: String,
     api_key: String,
+    extra_headers: Vec<(String, String)>,
     client: reqwest::Client,
 }
 
@@ -18,10 +21,20 @@ impl OpenAiProvider {
         model: impl Into<String>,
         api_key: impl Into<String>,
     ) -> Self {
+        Self::new_with_headers(base_url, model, api_key, vec![])
+    }
+
+    pub fn new_with_headers(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+        extra_headers: Vec<(String, String)>,
+    ) -> Self {
         Self {
             base_url: base_url.into(),
             model: model.into(),
             api_key: api_key.into(),
+            extra_headers,
             client: reqwest::Client::new(),
         }
     }
@@ -70,6 +83,7 @@ impl OpenAiProvider {
             base_url: self.base_url.clone(),
             model: model.into(),
             api_key: self.api_key.clone(),
+            extra_headers: self.extra_headers.clone(),
             client: self.client.clone(),
         }
     }
@@ -78,6 +92,7 @@ impl OpenAiProvider {
         let url = format!("{}/v1/chat/completions", self.base_url);
         let model = self.model.clone();
         let api_key = self.api_key.clone();
+        let extra_headers = self.extra_headers.clone();
         let client = self.client.clone();
         let debug = std::env::var("PIRS_DEBUG").is_ok();
 
@@ -101,10 +116,14 @@ impl OpenAiProvider {
                 }
             }
 
-            let response = match client
+            let mut req = client
                 .post(&url)
                 .bearer_auth(&api_key)
-                .json(&body)
+                .json(&body);
+            for (k, v) in &extra_headers {
+                req = req.header(k.as_str(), v.as_str());
+            }
+            let response = match req
                 .send()
                 .await
                 .map_err(|e| format!("Failed to connect to OpenAI at {url}: {e}"))
@@ -421,9 +440,14 @@ impl LlmProvider for OpenAiProvider {
     fn list_models(&self) -> ModelListFuture {
         let url = format!("{}/v1/models", self.base_url);
         let api_key = self.api_key.clone();
+        let extra_headers = self.extra_headers.clone();
         let client = self.client.clone();
         Box::pin(async move {
-            let response = match client.get(&url).bearer_auth(&api_key).send().await {
+            let mut req = client.get(&url).bearer_auth(&api_key);
+            for (k, v) in &extra_headers {
+                req = req.header(k.as_str(), v.as_str());
+            }
+            let response = match req.send().await {
                 Ok(r) => r,
                 Err(_) => return vec![],
             };

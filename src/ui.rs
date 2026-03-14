@@ -18,8 +18,14 @@ const USER_BG: Color = Color::Rgb(50, 50, 60);
 /// The textarea itself is owned by `App` with no styling baked in;
 /// all rendering concerns live here.
 fn style_textarea(app: &mut App) {
-    app.textarea
-        .set_block(Block::default().borders(Borders::NONE));
+    // The Block's style fills every cell the widget owns (including empty
+    // lines below the cursor); set_style() only covers the text spans.
+    // Both must carry INPUT_BG so the background is uniform.
+    app.textarea.set_block(
+        Block::default()
+            .borders(Borders::NONE)
+            .style(Style::default().bg(INPUT_BG)),
+    );
     app.textarea
         .set_style(Style::default().fg(Color::White).bg(INPUT_BG));
     // Highlight the active cursor line with a slightly brighter shade.

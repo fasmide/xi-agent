@@ -4,6 +4,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::{app::App, llm::Role};
 
@@ -173,8 +174,9 @@ fn append_message(
 
             if user {
                 // Pad to `width` so the background spans the full line.
-                let text_len = chunk.chars().count();
-                let padding = width.saturating_sub(text_len);
+                // Use unicode-aware column width, not scalar char count.
+                let text_cols = chunk.as_str().width();
+                let padding = width.saturating_sub(text_cols);
                 let padded = format!("{}{}", chunk, " ".repeat(padding));
                 out.push(Line::from(Span::styled(padded, user_bg)));
             } else {
@@ -188,9 +190,10 @@ fn append_message(
     }
 }
 
-/// Split `text` into lines of at most `width` characters, breaking at word
-/// boundaries.  Words longer than `width` are hard-broken as a last resort.
-/// Always returns at least one chunk (empty string when `text` is empty).
+/// Split `text` into lines of at most `width` display columns, preserving
+/// internal whitespace. Uses `textwrap` for word-boundary splitting and
+/// `unicode-width` for correct column measurement of CJK / emoji characters.
+/// Always returns at least one element (empty string when `text` is empty).
 fn wrap_str(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
@@ -198,77 +201,8 @@ fn wrap_str(text: &str, width: usize) -> Vec<String> {
     if text.is_empty() {
         return vec![String::new()];
     }
-
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut current_len: usize = 0;
-
-    for word in text.split_whitespace() {
-        let word_len = word.chars().count();
-
-        if current.is_empty() {
-            // Start of a new line — always place the word here, hard-breaking
-            // if the word itself is longer than the available width.
-            if word_len <= width {
-                current.push_str(word);
-                current_len = word_len;
-            } else {
-                hard_break(word, width, &mut lines, &mut current, &mut current_len);
-            }
-        } else {
-            // There is already content on the current line.
-            let needed = 1 + word_len; // space + word
-            if current_len + needed <= width {
-                current.push(' ');
-                current.push_str(word);
-                current_len += needed;
-            } else {
-                // Word doesn't fit — flush the current line and start fresh.
-                lines.push(current.clone());
-                current.clear();
-                current_len = 0;
-
-                if word_len <= width {
-                    current.push_str(word);
-                    current_len = word_len;
-                } else {
-                    hard_break(word, width, &mut lines, &mut current, &mut current_len);
-                }
-            }
-        }
-    }
-
-    if !current.is_empty() || lines.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
-/// Hard-break an oversized `word` across multiple lines of `width` columns,
-/// flushing complete lines into `out` and leaving the final fragment in
-/// `current` / `current_len`.
-fn hard_break(
-    word: &str,
-    width: usize,
-    out: &mut Vec<String>,
-    current: &mut String,
-    current_len: &mut usize,
-) {
-    let mut remaining = word;
-    while !remaining.is_empty() {
-        let take = remaining
-            .char_indices()
-            .nth(width)
-            .map(|(i, _)| i)
-            .unwrap_or(remaining.len());
-        let (head, tail) = remaining.split_at(take);
-        if tail.is_empty() {
-            // Last fragment — leave it in `current` for the caller to continue.
-            current.push_str(head);
-            *current_len = head.chars().count();
-        } else {
-            out.push(head.to_string());
-        }
-        remaining = tail;
-    }
+    textwrap::wrap(text, width)
+        .into_iter()
+        .map(|cow| cow.into_owned())
+        .collect()
 }

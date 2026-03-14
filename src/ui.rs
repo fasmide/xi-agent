@@ -11,6 +11,9 @@ use crate::{app::App, llm::Role};
 /// Background colour of the input panel.
 const INPUT_BG: Color = Color::Rgb(30, 30, 40);
 
+/// Background colour of user message blocks in the chat log.
+const USER_BG: Color = Color::Rgb(50, 50, 60);
+
 /// Apply visual styles to the textarea at render time.
 /// The textarea itself is owned by `App` with no styling baked in;
 /// all rendering concerns live here.
@@ -24,15 +27,16 @@ fn style_textarea(app: &mut App) {
         .set_cursor_line_style(Style::default().bg(Color::Rgb(50, 50, 65)));
 }
 
-/// Render a full-width row of halfblock characters in `INPUT_BG` so that the
-/// input panel appears to have a smooth edge against the default background.
+/// Render a full-width row of halfblock characters in `color` so that a
+/// coloured panel appears to have a smooth sub-character edge against the
+/// default terminal background.
 ///
-/// - Top edge: `▄` (lower-half block) — upper half = chat bg, lower half = INPUT_BG
-/// - Bottom edge: `▀` (upper-half block) — upper half = INPUT_BG, lower half = terminal bg
-fn halfblock_line(width: usize, ch: char) -> Line<'static> {
+/// - Top edge: `▄` (lower-half block) — upper half = bg, lower half = color
+/// - Bottom edge: `▀` (upper-half block) — upper half = color, lower half = bg
+fn halfblock_line(width: usize, ch: char, color: Color) -> Line<'static> {
     Line::from(Span::styled(
         ch.to_string().repeat(width),
-        Style::default().fg(INPUT_BG),
+        Style::default().fg(color),
     ))
 }
 
@@ -111,11 +115,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let width = f.area().width as usize;
 
     f.render_widget(
-        Paragraph::new(halfblock_line(width, '▄')),
+        Paragraph::new(halfblock_line(width, '▄', INPUT_BG)),
         top_hb_area,
     );
     f.render_widget(
-        Paragraph::new(halfblock_line(width, '▀')),
+        Paragraph::new(halfblock_line(width, '▀', INPUT_BG)),
         bot_hb_area,
     );
 
@@ -174,7 +178,7 @@ fn append_message(
     width: usize,
     user: bool,
 ) {
-    let user_bg = Style::default().bg(Color::Rgb(50, 50, 50));
+    let user_bg_style = Style::default().bg(USER_BG);
 
     // Split on explicit newlines first, then wrap each segment to width.
     let segments: Vec<&str> = if content.is_empty() {
@@ -184,6 +188,10 @@ fn append_message(
     };
 
     let last_seg = segments.len() - 1;
+
+    if user {
+        out.push(halfblock_line(width, '▄', USER_BG));
+    }
 
     for (seg_idx, segment) in segments.iter().enumerate() {
         let is_last_seg = seg_idx == last_seg;
@@ -200,7 +208,7 @@ fn append_message(
                 let text_cols = chunk.as_str().width();
                 let padding = width.saturating_sub(text_cols);
                 let padded = format!("{}{}", chunk, " ".repeat(padding));
-                out.push(Line::from(Span::styled(padded, user_bg)));
+                out.push(Line::from(Span::styled(padded, user_bg_style)));
             } else {
                 let mut spans: Vec<Span<'static>> = vec![Span::raw(chunk.clone())];
                 if show_suffix {
@@ -209,6 +217,10 @@ fn append_message(
                 out.push(Line::from(spans));
             }
         }
+    }
+
+    if user {
+        out.push(halfblock_line(width, '▀', USER_BG));
     }
 }
 

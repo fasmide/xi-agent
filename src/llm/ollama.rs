@@ -1,9 +1,8 @@
 use anyhow::Context;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::UnboundedSender;
 
-use super::{LlmEvent, LlmProvider, Message};
+use super::{LlmEvent, LlmProvider, LlmStream, Message};
 
 pub struct OllamaProvider {
     pub base_url: String,
@@ -33,16 +32,16 @@ impl OllamaProvider {
 // ── Serde types for the Ollama /api/chat endpoint ────────────────────────────
 
 #[derive(Serialize)]
-struct ChatRequest<'a> {
-    model: &'a str,
-    messages: Vec<OllamaMessage<'a>>,
+struct ChatRequest {
+    model: String,
+    messages: Vec<OllamaMessage>,
     stream: bool,
 }
 
 #[derive(Serialize)]
-struct OllamaMessage<'a> {
-    role: &'a str,
-    content: &'a str,
+struct OllamaMessage {
+    role: &'static str,
+    content: String,
 }
 
 #[derive(Deserialize)]
@@ -60,76 +59,88 @@ struct ChunkMessage {
 // ── Provider implementation ───────────────────────────────────────────────────
 
 impl LlmProvider for OllamaProvider {
-    async fn stream_chat(
-        &self,
-        messages: &[Message],
-        tx: UnboundedSender<LlmEvent>,
-    ) -> anyhow::Result<()> {
+    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
         let url = format!("{}/api/chat", self.base_url);
+        let model = self.model.clone();
+        let client = self.client.clone();
 
-        let body = ChatRequest {
-            model: &self.model,
-            messages: messages
-                .iter()
-                .map(|m| OllamaMessage {
-                    role: m.role.as_str(),
-                    content: &m.content,
-                })
-                .collect(),
-            stream: true,
-        };
+        Box::pin(async_stream::stream! {
+            let body = ChatRequest {
+                model,
+                messages: messages
+                    .iter()
+                    .map(|m| OllamaMessage {
+                        role: m.role.as_str(),
+                        content: m.content.clone(),
+                    })
+                    .collect(),
+                stream: true,
+            };
 
-        let response = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!("Failed to connect to Ollama at {url}"))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Ollama returned {status}: {text}");
-        }
-
-        let mut stream = response.bytes_stream();
-
-        // Ollama streams NDJSON: one JSON object per line.
-        let mut buf = String::new();
-        while let Some(chunk) = stream.next().await {
-            let bytes = chunk.context("Error reading stream chunk")?;
-            buf.push_str(&String::from_utf8_lossy(&bytes));
-
-            // Process every complete line in the buffer.
-            while let Some(pos) = buf.find('\n') {
-                let line = buf[..pos].trim().to_string();
-                buf.drain(..=pos);
-
-                if line.is_empty() {
-                    continue;
+            let response = match client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .with_context(|| format!("Failed to connect to Ollama at {url}"))
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    yield LlmEvent::Error(e.to_string());
+                    return;
                 }
+            };
 
-                match serde_json::from_str::<ChatChunk>(&line) {
-                    Ok(chunk) => {
-                        if !chunk.message.content.is_empty() {
-                            let _ = tx.send(LlmEvent::Token(chunk.message.content));
-                        }
-                        if chunk.done {
-                            let _ = tx.send(LlmEvent::Done);
-                            return Ok(());
-                        }
-                    }
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                yield LlmEvent::Error(format!("Ollama returned {status}: {text}"));
+                return;
+            }
+
+            let mut byte_stream = response.bytes_stream();
+
+            // Ollama streams NDJSON: one JSON object per line.
+            let mut buf = String::new();
+            while let Some(chunk) = byte_stream.next().await {
+                let bytes = match chunk.context("Error reading stream chunk") {
+                    Ok(b) => b,
                     Err(e) => {
-                        let _ = tx.send(LlmEvent::Error(format!("Parse error: {e}")));
-                        return Ok(());
+                        yield LlmEvent::Error(e.to_string());
+                        return;
+                    }
+                };
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+
+                // Process every complete line in the buffer.
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim().to_string();
+                    buf.drain(..=pos);
+
+                    if line.is_empty() {
+                        continue;
+                    }
+
+                    match serde_json::from_str::<ChatChunk>(&line) {
+                        Ok(chunk) => {
+                            if !chunk.message.content.is_empty() {
+                                yield LlmEvent::Token(chunk.message.content);
+                            }
+                            if chunk.done {
+                                yield LlmEvent::Done;
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            yield LlmEvent::Error(format!("Parse error: {e}"));
+                            return;
+                        }
                     }
                 }
             }
-        }
 
-        // Stream ended without a done=true (shouldn't happen with Ollama, but be safe).
-        let _ = tx.send(LlmEvent::Done);
-        Ok(())
+            // Stream ended without a done=true (shouldn't happen with Ollama, but be safe).
+            yield LlmEvent::Done;
+        })
     }
 }

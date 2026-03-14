@@ -17,6 +17,7 @@ pub struct App {
     pub streaming: bool,
     /// Optional system prompt prepended to every request.
     pub system_prompt: Option<String>,
+    /// Receives LlmEvents forwarded from the active streaming task.
     pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<LlmEvent>,
     event_tx: tokio::sync::mpsc::UnboundedSender<LlmEvent>,
 }
@@ -69,8 +70,6 @@ impl App {
         self.auto_scroll = true;
         self.streaming = true;
 
-        let provider = Arc::clone(provider);
-        let tx = self.event_tx.clone();
         // Build the history to send: optional system message first, then all
         // conversation messages except the trailing empty assistant placeholder
         // that was just pushed above.
@@ -80,9 +79,20 @@ impl App {
             .map(|s| Message { role: Role::System, content: s.clone() })
             .chain(self.messages[..self.messages.len() - 1].iter().cloned())
             .collect();
+
+        // Obtain a stream from the provider — no channel required by the trait.
+        // We bridge it to our internal channel here so the event loop can drain
+        // it non-blockingly with try_recv().
+        let mut stream = provider.stream_chat(history);
+        let tx = self.event_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = provider.stream_chat(&history, tx.clone()).await {
-                let _ = tx.send(LlmEvent::Error(e.to_string()));
+            use futures_util::StreamExt;
+            while let Some(event) = stream.next().await {
+                let done = matches!(event, LlmEvent::Done | LlmEvent::Error(_));
+                let _ = tx.send(event);
+                if done {
+                    break;
+                }
             }
         });
     }
@@ -109,25 +119,30 @@ impl App {
         self.auto_scroll = true;
     }
 
-    /// Drain the event channel and apply any pending LLM events.
-    pub fn apply_events(&mut self) {
-        while let Ok(ev) = self.event_rx.try_recv() {
-            match ev {
-                LlmEvent::Token(token) => {
-                    if let Some(last) = self.messages.last_mut() {
-                        last.content.push_str(&token);
-                    }
-                }
-                LlmEvent::Done => {
-                    self.streaming = false;
-                }
-                LlmEvent::Error(e) => {
-                    if let Some(last) = self.messages.last_mut() {
-                        last.content = format!("[Error: {e}]");
-                    }
-                    self.streaming = false;
+    /// Apply a single LLM event to the application state.
+    pub fn apply_event(&mut self, ev: LlmEvent) {
+        match ev {
+            LlmEvent::Token(token) => {
+                if let Some(last) = self.messages.last_mut() {
+                    last.content.push_str(&token);
                 }
             }
+            LlmEvent::Done => {
+                self.streaming = false;
+            }
+            LlmEvent::Error(e) => {
+                if let Some(last) = self.messages.last_mut() {
+                    last.content = format!("[Error: {e}]");
+                }
+                self.streaming = false;
+            }
+        }
+    }
+
+    /// Drain the event channel and apply all pending LLM events.
+    pub fn apply_events(&mut self) {
+        while let Ok(ev) = self.event_rx.try_recv() {
+            self.apply_event(ev);
         }
     }
 }

@@ -11,8 +11,8 @@ use tui_textarea::TextArea;
 mod llm;
 mod ui;
 
-use llm::{AppEvent, LlmProvider, Message, Role};
 use llm::ollama::OllamaProvider;
+use llm::{AppEvent, LlmProvider, Message, Role};
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -20,6 +20,11 @@ pub struct App<'a> {
     pub messages: Vec<Message>,
     pub textarea: TextArea<'a>,
     pub log_scroll: usize,
+    /// When true, the view always follows the bottom (auto-scrolls).
+    /// Set to false when the user scrolls up; restored on PageDown or new submit.
+    pub auto_scroll: bool,
+    /// Height of the log pane from the last draw — used as the page size for scrolling.
+    pub last_log_height: usize,
     pub streaming: bool,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     event_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
@@ -32,6 +37,8 @@ impl<'a> App<'a> {
             messages: Vec::new(),
             textarea: ui::make_textarea(),
             log_scroll: 0,
+            auto_scroll: true,
+            last_log_height: 0,
             streaming: false,
             event_rx,
             event_tx,
@@ -47,22 +54,19 @@ impl<'a> App<'a> {
             return;
         }
 
-        // Add user message.
         self.messages.push(Message {
             role: Role::User,
             content: trimmed,
         });
-        // Add an empty placeholder for the assistant's reply.
         self.messages.push(Message {
             role: Role::Assistant,
             content: String::new(),
         });
 
         self.textarea = ui::make_textarea();
-        self.log_scroll = usize::MAX;
+        self.auto_scroll = true;
         self.streaming = true;
 
-        // Spawn the LLM task.
         let provider = Arc::clone(provider);
         let tx = self.event_tx.clone();
         let history: Vec<Message> = self.messages[..self.messages.len() - 1].to_vec();
@@ -73,6 +77,19 @@ impl<'a> App<'a> {
         });
     }
 
+    /// Scroll up by one page. Disables auto-scroll.
+    pub fn scroll_up(&mut self) {
+        self.auto_scroll = false;
+        self.log_scroll = self
+            .log_scroll
+            .saturating_sub(self.last_log_height.max(1));
+    }
+
+    /// Scroll down by one page. Snaps to bottom and re-enables auto-scroll.
+    pub fn scroll_down(&mut self) {
+        self.auto_scroll = true;
+    }
+
     /// Drain the event channel and apply any pending LLM events.
     pub fn apply_events(&mut self) {
         while let Ok(ev) = self.event_rx.try_recv() {
@@ -80,7 +97,6 @@ impl<'a> App<'a> {
                 AppEvent::Token(token) => {
                     if let Some(last) = self.messages.last_mut() {
                         last.content.push_str(&token);
-                        self.log_scroll = usize::MAX;
                     }
                 }
                 AppEvent::Done => {
@@ -129,12 +145,9 @@ async fn run(
     provider: &Arc<dyn LlmProvider>,
 ) -> io::Result<()> {
     loop {
-        // Drain LLM events before drawing.
         app.apply_events();
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // Poll for terminal input with a short timeout so we keep refreshing
-        // the display while streaming.
         if event::poll(Duration::from_millis(10))? {
             if let Event::Key(key) = event::read()? {
                 if key.code == KeyCode::Char('c')
@@ -146,9 +159,20 @@ async fn run(
                     return Ok(());
                 }
 
-                if key.code == KeyCode::Enter && key.modifiers.is_empty() {
-                    app.submit(provider);
-                    continue;
+                match key.code {
+                    KeyCode::PageUp => {
+                        app.scroll_up();
+                        continue;
+                    }
+                    KeyCode::PageDown => {
+                        app.scroll_down();
+                        continue;
+                    }
+                    KeyCode::Enter if key.modifiers.is_empty() => {
+                        app.submit(provider);
+                        continue;
+                    }
+                    _ => {}
                 }
 
                 app.textarea.input(Event::Key(key));

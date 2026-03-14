@@ -43,7 +43,11 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     let total_lines = lines.len();
     let max_scroll = total_lines.saturating_sub(inner_height);
-    if app.log_scroll == usize::MAX {
+
+    // Store the log height so the event loop can use it as a page size.
+    app.last_log_height = inner_height;
+
+    if app.auto_scroll {
         app.log_scroll = max_scroll;
     } else {
         app.log_scroll = app.log_scroll.min(max_scroll);

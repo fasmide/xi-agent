@@ -1,1 +1,23 @@
-/target
+# Build output
+/target/
+
+# Cargo lock file (keep for binaries, remove for libraries)
+# Cargo.lock
+
+# Editor / IDE
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+
+# Profiling / benchmarks artifacts
+perf.data
+perf.data.old
+flamegraph.svg

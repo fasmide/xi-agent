@@ -4,11 +4,13 @@ use crate::agent::types::ToolRegistry;
 
 pub mod bash;
 pub mod edit;
+pub mod find;
 pub mod read;
 pub mod write;
 
 use bash::BashTool;
 use edit::EditTool;
+use find::FindTool;
 use read::ReadFileTool;
 use write::WriteTool;
 
@@ -21,6 +23,7 @@ pub fn register_builtin_tools() -> ToolRegistry {
         Arc::new(WriteTool),
         Arc::new(EditTool),
         Arc::new(BashTool),
+        Arc::new(FindTool),
     ];
 
     for tool in tools {

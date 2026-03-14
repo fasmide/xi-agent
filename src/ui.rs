@@ -4,19 +4,23 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
-use tui_textarea::TextArea;
 
-use crate::{llm::Role, App};
+use crate::{app::App, llm::Role};
 
-pub fn make_textarea<'a>() -> TextArea<'a> {
-    let mut textarea = TextArea::default();
-    textarea.set_block(Block::default().borders(Borders::NONE));
-    textarea.set_style(Style::default().fg(Color::White));
-    textarea.set_cursor_line_style(Style::default());
-    textarea
+/// Apply visual styles to the textarea at render time.
+/// The textarea itself is owned by `App` with no styling baked in;
+/// all rendering concerns live here.
+fn style_textarea(app: &mut App) {
+    app.textarea
+        .set_block(Block::default().borders(Borders::NONE));
+    app.textarea
+        .set_style(Style::default().fg(Color::White));
+    app.textarea.set_cursor_line_style(Style::default());
 }
 
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
+    style_textarea(app);
+
     let terminal_height = f.area().height as usize;
 
     let input_line_count = app.textarea.lines().len().max(1);
@@ -209,24 +213,7 @@ fn wrap_str(text: &str, width: usize) -> Vec<String> {
                 current.push_str(word);
                 current_len = word_len;
             } else {
-                // Hard-break the oversized word across multiple lines.
-                let mut remaining = word;
-                while !remaining.is_empty() {
-                    let take = remaining
-                        .char_indices()
-                        .nth(width)
-                        .map(|(i, _)| i)
-                        .unwrap_or(remaining.len());
-                    let (head, tail) = remaining.split_at(take);
-                    if tail.is_empty() {
-                        // Last fragment — continue accumulating normally.
-                        current.push_str(head);
-                        current_len = head.chars().count();
-                    } else {
-                        lines.push(head.to_string());
-                    }
-                    remaining = tail;
-                }
+                hard_break(word, width, &mut lines, &mut current, &mut current_len);
             }
         } else {
             // There is already content on the current line.
@@ -245,23 +232,7 @@ fn wrap_str(text: &str, width: usize) -> Vec<String> {
                     current.push_str(word);
                     current_len = word_len;
                 } else {
-                    // Hard-break the oversized word.
-                    let mut remaining = word;
-                    while !remaining.is_empty() {
-                        let take = remaining
-                            .char_indices()
-                            .nth(width)
-                            .map(|(i, _)| i)
-                            .unwrap_or(remaining.len());
-                        let (head, tail) = remaining.split_at(take);
-                        if tail.is_empty() {
-                            current.push_str(head);
-                            current_len = head.chars().count();
-                        } else {
-                            lines.push(head.to_string());
-                        }
-                        remaining = tail;
-                    }
+                    hard_break(word, width, &mut lines, &mut current, &mut current_len);
                 }
             }
         }
@@ -271,4 +242,33 @@ fn wrap_str(text: &str, width: usize) -> Vec<String> {
         lines.push(current);
     }
     lines
+}
+
+/// Hard-break an oversized `word` across multiple lines of `width` columns,
+/// flushing complete lines into `out` and leaving the final fragment in
+/// `current` / `current_len`.
+fn hard_break(
+    word: &str,
+    width: usize,
+    out: &mut Vec<String>,
+    current: &mut String,
+    current_len: &mut usize,
+) {
+    let mut remaining = word;
+    while !remaining.is_empty() {
+        let take = remaining
+            .char_indices()
+            .nth(width)
+            .map(|(i, _)| i)
+            .unwrap_or(remaining.len());
+        let (head, tail) = remaining.split_at(take);
+        if tail.is_empty() {
+            // Last fragment — leave it in `current` for the caller to continue.
+            current.push_str(head);
+            *current_len = head.chars().count();
+        } else {
+            out.push(head.to_string());
+        }
+        remaining = tail;
+    }
 }

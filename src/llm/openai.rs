@@ -53,9 +53,9 @@ impl OpenAiProvider {
         let preset = std::env::var("PIRS_PRESET").unwrap_or_default();
 
         let (default_base_url, preset_key_var): (&str, &str) = match preset.as_str() {
-            "openrouter" => ("https://openrouter.ai/api", "OPENROUTER_API_KEY"),
-            "groq" => ("https://api.groq.com/openai", "GROQ_API_KEY"),
-            _ => ("https://api.openai.com", "OPENAI_API_KEY"),
+            "openrouter" => ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+            "groq"       => ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+            _            => ("https://api.openai.com/v1", "OPENAI_API_KEY"),
         };
 
         let base_url =
@@ -89,7 +89,7 @@ impl OpenAiProvider {
     }
 
     fn stream_inner(&self, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> LlmStream {
-        let url = format!("{}/v1/chat/completions", self.base_url);
+        let url = format!("{}/chat/completions", self.base_url);
         let model = self.model.clone();
         let api_key = self.api_key.clone();
         let extra_headers = self.extra_headers.clone();
@@ -438,7 +438,7 @@ impl LlmProvider for OpenAiProvider {
     }
 
     fn list_models(&self) -> ModelListFuture {
-        let url = format!("{}/v1/models", self.base_url);
+        let url = format!("{}/models", self.base_url);
         let api_key = self.api_key.clone();
         let extra_headers = self.extra_headers.clone();
         let client = self.client.clone();

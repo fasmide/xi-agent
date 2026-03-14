@@ -141,9 +141,9 @@ provider is active.
 
 ## What Is Not Here Yet
 
-- **Tool confirmation UI** — `before_tool_call` is always `None`; the agent
-  runs tools without asking the user. See
-  [plan](plans/2026-03-14-tool-confirmation.md).
+- **`ask_user` tool** — no built-in tool for the model to ask the user a
+  question mid-task; the agent cannot pause for user decisions. See
+  [plan](plans/2026-03-14-ask-user-tool.md).
 - **Config file** — provider selection and API keys are env-var only; no
   persistent `~/.config/pirs/config.toml`. See
   [plan](plans/2026-03-14-config-file.md).

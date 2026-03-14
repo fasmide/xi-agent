@@ -38,16 +38,18 @@ Active provider and model shown in the Ctrl+I info bar. `/provider` and
 
 ## 🔴 High priority
 
-### 1. Tool confirmation UI
-The agent currently executes `bash`, `write`, and `edit` calls silently,
-without asking the user. This is the most significant safety gap.
+### 1. `ask_user` tool
+Add a sixth built-in tool the model can call when it reaches a genuine
+decision point — choosing between approaches, resolving an ambiguous
+filename, obtaining a value it cannot infer. The model decides when to call
+it; it is not an automatic gate before every operation.
 
-Wire a user-approval step through the existing `before_tool_call` hook:
-display a confirmation prompt in the TUI before each destructive tool
-invocation, require an explicit `y` / `n` keystroke, and block or allow the
-call accordingly. Read-only tools (`read_file`, `find`) can be auto-approved.
+The tool pauses the agent loop, surfaces the question in the TUI, accepts
+the user's typed response via the normal input field, and returns the answer
+as the tool result. The system prompt tells the model to use it only when
+truly necessary.
 
-See [plan](plans/2026-03-14-tool-confirmation.md).
+See [plan](plans/2026-03-14-ask-user-tool.md).
 
 ### 2. Fix clippy warnings
 `cargo clippy` reports 19 warnings — mostly collapsible `if` chains,

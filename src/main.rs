@@ -18,7 +18,7 @@ mod llm;
 mod ui;
 
 use app::App;
-use agent::{tools::register_builtin_tools, AgentLoopConfig};
+use agent::{build_system_prompt, tools::register_builtin_tools, AgentLoopConfig};
 use commands::CommandAction;
 use llm::{ollama::OllamaProvider, LlmProvider};
 
@@ -42,12 +42,19 @@ async fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let tools = register_builtin_tools();
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| ".".to_string());
+    let system_prompt = build_system_prompt(&tools, &cwd);
+
     let mut app = App::new(&current_model, AgentLoopConfig {
-        tools: register_builtin_tools(),
+        tools,
         before_tool_call: None,
         after_tool_call: None,
         max_turns: 20,
     });
+    app.system_prompt = Some(system_prompt);
 
     // The outer loop re-enters `run` when the user changes the model with
     // `/model <name>`, rebuilding the provider with the new model name while

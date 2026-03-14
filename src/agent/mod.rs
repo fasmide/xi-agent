@@ -7,8 +7,10 @@ use crate::llm::{LlmEvent, LlmProvider, Message, ToolDefinition};
 
 pub mod tools;
 pub mod types;
+pub mod system_prompt;
 
 pub use types::{AgentEvent, AgentLoopConfig, ToolResult};
+pub use system_prompt::build_system_prompt;
 
 /// Run the agent loop: call the LLM, execute tool calls, repeat until the
 /// model gives a final text answer or `max_turns` is reached.

@@ -110,7 +110,22 @@ struct ToolCallChunk {
 #[derive(Deserialize)]
 struct ToolCallFunction {
     name: String,
+    /// Ollama may return `arguments` as a JSON object **or** as a
+    /// string-encoded JSON object depending on the model/version.
+    /// `coerce_arguments` normalises the string case.
     arguments: serde_json::Value,
+}
+
+/// Normalise tool-call arguments: if Ollama returned them as a JSON string
+/// (e.g. `"{\"path\":\".\"}"`), parse that string into an object.
+/// Returns the value unchanged if it is already an object or array.
+fn coerce_arguments(v: serde_json::Value) -> serde_json::Value {
+    if let serde_json::Value::String(s) = &v {
+        if let Ok(parsed) = serde_json::from_str(s) {
+            return parsed;
+        }
+    }
+    v
 }
 
 // Serde types for the Ollama /api/tags endpoint.
@@ -170,7 +185,7 @@ fn parse_ndjson_line(line: &str, events: &mut Vec<LlmEvent>) -> bool {
                     events.push(LlmEvent::ToolCall {
                         id: format!("call_{i}"),
                         name: tc.function.name.clone(),
-                        args: tc.function.arguments.clone(),
+                        args: coerce_arguments(tc.function.arguments.clone()),
                     });
                 }
             } else {

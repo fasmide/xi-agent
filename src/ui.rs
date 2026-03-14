@@ -39,7 +39,15 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
-    let lines = build_log_lines(&app.messages, app.streaming);
+    let mut lines = build_log_lines(&app.messages, app.streaming);
+
+    // Pad with empty lines at the top so content is always anchored to the bottom.
+    if lines.len() < inner_height {
+        let padding = inner_height - lines.len();
+        let mut padded = vec![Line::default(); padding];
+        padded.append(&mut lines);
+        lines = padded;
+    }
 
     let total_lines = lines.len();
     let max_scroll = total_lines.saturating_sub(inner_height);

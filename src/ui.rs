@@ -114,6 +114,9 @@ fn build_log_lines(
             Role::User => {
                 append_message(&mut lines, &msg.content, "", width, true);
             }
+            Role::System => {
+                // System messages are not displayed in the chat log.
+            }
             Role::Assistant => {
                 let content = if streaming && is_last && msg.content.is_empty() {
                     "▋".to_string()

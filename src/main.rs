@@ -30,6 +30,8 @@ pub struct App<'a> {
     /// Height of the log pane from the last draw — used as the page size for scrolling.
     pub last_log_height: usize,
     pub streaming: bool,
+    /// Optional system prompt prepended to every request.
+    pub system_prompt: Option<String>,
     event_rx: tokio::sync::mpsc::UnboundedReceiver<LlmEvent>,
     event_tx: tokio::sync::mpsc::UnboundedSender<LlmEvent>,
 }
@@ -44,6 +46,7 @@ impl<'a> App<'a> {
             auto_scroll: true,
             last_log_height: 0,
             streaming: false,
+            system_prompt: None,
             event_rx,
             event_tx,
         }
@@ -73,8 +76,15 @@ impl<'a> App<'a> {
 
         let provider = Arc::clone(provider);
         let tx = self.event_tx.clone();
-        // History is everything except the trailing empty assistant message we just pushed.
-        let history: Vec<Message> = self.messages[..self.messages.len() - 1].to_vec();
+        // Build the history to send: optional system message first, then all
+        // conversation messages except the trailing empty assistant placeholder
+        // that was just pushed above.
+        let history: Vec<Message> = self
+            .system_prompt
+            .iter()
+            .map(|s| Message { role: Role::System, content: s.clone() })
+            .chain(self.messages[..self.messages.len() - 1].iter().cloned())
+            .collect();
         tokio::spawn(async move {
             if let Err(e) = provider.stream_chat(&history, tx.clone()).await {
                 let _ = tx.send(LlmEvent::Error(e.to_string()));

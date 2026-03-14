@@ -3,60 +3,106 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
-    Terminal,
-};
-use std::io;
+use ratatui::{backend::CrosstermBackend, Terminal};
+use std::{io, sync::Arc, time::Duration};
+use tokio::sync::mpsc::unbounded_channel;
 use tui_textarea::TextArea;
 
-struct App<'a> {
-    messages: Vec<String>,
-    textarea: TextArea<'a>,
-    log_scroll: usize,
-}
+mod llm;
+mod ui;
 
-fn make_textarea<'a>() -> TextArea<'a> {
-    let mut textarea = TextArea::default();
-    textarea.set_block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Input ")
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
-    textarea.set_style(Style::default().fg(Color::White));
-    textarea.set_cursor_line_style(Style::default());
-    textarea
+use llm::{AppEvent, LlmProvider, Message, Role};
+use llm::ollama::OllamaProvider;
+
+// ── App state ─────────────────────────────────────────────────────────────────
+
+pub struct App<'a> {
+    pub messages: Vec<Message>,
+    pub textarea: TextArea<'a>,
+    pub log_scroll: usize,
+    pub streaming: bool,
+    event_rx: tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    event_tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
 }
 
 impl<'a> App<'a> {
-    fn new() -> Self {
+    pub fn new() -> Self {
+        let (event_tx, event_rx) = unbounded_channel();
         Self {
             messages: Vec::new(),
-            textarea: make_textarea(),
+            textarea: ui::make_textarea(),
             log_scroll: 0,
+            streaming: false,
+            event_rx,
+            event_tx,
         }
     }
 
-    /// Submit the current textarea content to the chat log.
-    fn submit(&mut self) {
+    /// Take the textarea content and start an LLM streaming request.
+    pub fn submit(&mut self, provider: &Arc<dyn LlmProvider>) {
         let lines: Vec<String> = self.textarea.lines().to_vec();
         let text = lines.join("\n");
         let trimmed = text.trim().to_string();
-        if !trimmed.is_empty() {
-            self.messages.push(trimmed);
+        if trimmed.is_empty() || self.streaming {
+            return;
         }
-        self.textarea = make_textarea();
-        // Signal: scroll to bottom next frame
+
+        // Add user message.
+        self.messages.push(Message {
+            role: Role::User,
+            content: trimmed,
+        });
+        // Add an empty placeholder for the assistant's reply.
+        self.messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+        });
+
+        self.textarea = ui::make_textarea();
         self.log_scroll = usize::MAX;
+        self.streaming = true;
+
+        // Spawn the LLM task.
+        let provider = Arc::clone(provider);
+        let tx = self.event_tx.clone();
+        let history: Vec<Message> = self.messages[..self.messages.len() - 1].to_vec();
+        tokio::spawn(async move {
+            if let Err(e) = provider.stream_chat(&history, tx.clone()).await {
+                let _ = tx.send(AppEvent::Error(e.to_string()));
+            }
+        });
+    }
+
+    /// Drain the event channel and apply any pending LLM events.
+    pub fn apply_events(&mut self) {
+        while let Ok(ev) = self.event_rx.try_recv() {
+            match ev {
+                AppEvent::Token(token) => {
+                    if let Some(last) = self.messages.last_mut() {
+                        last.content.push_str(&token);
+                        self.log_scroll = usize::MAX;
+                    }
+                }
+                AppEvent::Done => {
+                    self.streaming = false;
+                }
+                AppEvent::Error(e) => {
+                    if let Some(last) = self.messages.last_mut() {
+                        last.content = format!("[Error: {e}]");
+                    }
+                    self.streaming = false;
+                }
+            }
+        }
     }
 }
 
-fn main() -> io::Result<()> {
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    let provider: Arc<dyn LlmProvider> = Arc::new(OllamaProvider::from_env());
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -64,7 +110,7 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new();
-    let res = run(&mut terminal, &mut app);
+    let res = run(&mut terminal, &mut app, &provider).await;
 
     disable_raw_mode()?;
     execute!(
@@ -77,102 +123,36 @@ fn main() -> io::Result<()> {
     res
 }
 
-fn run(
+async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    app: &mut App,
+    app: &mut App<'_>,
+    provider: &Arc<dyn LlmProvider>,
 ) -> io::Result<()> {
     loop {
-        terminal.draw(|f| ui(f, app))?;
+        // Drain LLM events before drawing.
+        app.apply_events();
+        terminal.draw(|f| ui::draw(f, app))?;
 
-        let ev = event::read()?;
-        if let Event::Key(key) = ev {
-            // Quit
-            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                return Ok(());
-            }
-            if key.code == KeyCode::Esc {
-                return Ok(());
-            }
+        // Poll for terminal input with a short timeout so we keep refreshing
+        // the display while streaming.
+        if event::poll(Duration::from_millis(10))? {
+            if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    return Ok(());
+                }
+                if key.code == KeyCode::Esc {
+                    return Ok(());
+                }
 
-            // Plain Enter = submit
-            if key.code == KeyCode::Enter && key.modifiers.is_empty() {
-                app.submit();
-                continue;
-            }
+                if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+                    app.submit(provider);
+                    continue;
+                }
 
-            // Forward to textarea (re-wrap as Event so tui-textarea gets the right type)
-            app.textarea.input(Event::Key(key));
-        }
-    }
-}
-
-fn ui(f: &mut ratatui::Frame, app: &mut App) {
-    let terminal_height = f.area().height as usize;
-
-    // Textarea height: line count + 2 borders, clamped to 40% of terminal
-    let input_line_count = app.textarea.lines().len().max(1);
-    let max_input_height = (terminal_height * 40 / 100).max(3);
-    let input_height = (input_line_count + 2).min(max_input_height) as u16;
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(input_height)])
-        .split(f.area());
-
-    // ── Chat log ──────────────────────────────────────────────────────────────
-    let log_area = chunks[0];
-    let inner_height = log_area.height.saturating_sub(2) as usize;
-
-    let mut lines: Vec<Line> = Vec::new();
-    for msg in &app.messages {
-        for (i, part) in msg.lines().enumerate() {
-            if i == 0 {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "You: ",
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(part.to_string()),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw("      "),
-                    Span::raw(part.to_string()),
-                ]));
+                app.textarea.input(Event::Key(key));
             }
         }
     }
-
-    let total_lines = lines.len();
-    let max_scroll = total_lines.saturating_sub(inner_height);
-    if app.log_scroll == usize::MAX {
-        app.log_scroll = max_scroll;
-    } else {
-        app.log_scroll = app.log_scroll.min(max_scroll);
-    }
-    let scroll_offset = app.log_scroll as u16;
-
-    let log_paragraph = Paragraph::new(Text::from(lines))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Chat ")
-                .border_style(Style::default().fg(Color::DarkGray)),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_offset, 0));
-
-    f.render_widget(log_paragraph, log_area);
-
-    // Scrollbar
-    if total_lines > inner_height {
-        let mut scrollbar_state = ScrollbarState::new(max_scroll + 1).position(app.log_scroll);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-        f.render_stateful_widget(scrollbar, log_area, &mut scrollbar_state);
-    }
-
-    // ── Input box ─────────────────────────────────────────────────────────────
-    f.render_widget(&app.textarea, chunks[1]);
 }

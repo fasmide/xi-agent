@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tui_textarea::{CursorMove, TextArea};
 
 use crate::{
-    commands::{self, SlashCommand},
+    commands::{self, CompletionItem},
     llm::{LlmEvent, LlmProvider, Message, Role},
 };
 
@@ -13,27 +13,40 @@ pub struct App {
     pub textarea: TextArea<'static>,
     pub log_scroll: usize,
     /// When true, the view always follows the bottom (auto-scrolls).
-    /// Set to false when the user scrolls up; restored on PageDown or new submit.
     pub auto_scroll: bool,
-    /// Height of the log pane from the last draw — used as the page size for scrolling.
+    /// Height of the log pane from the last draw — used as page-size scrolling.
     pub last_log_height: usize,
     pub streaming: bool,
     /// Optional system prompt prepended to every request.
     pub system_prompt: Option<String>,
     /// Currently active model name (mirrors the provider; updated on `/model`).
     pub current_model: String,
-    /// Commands matching the current slash-command prefix (empty = popup hidden).
-    pub slash_completions: Vec<&'static SlashCommand>,
-    /// Highlighted index in the completion popup.
-    pub slash_selected: usize,
+
+    // ── Completion popup ──────────────────────────────────────────────────────
+    /// Items to display in the completion popup (empty = popup hidden).
+    pub completions: Vec<CompletionItem>,
+    /// Index of the currently highlighted completion row.
+    pub completion_selected: usize,
+
+    // ── Available models (for /model completions) ─────────────────────────────
+    /// Cached model list from the provider; `None` until first fetch.
+    pub available_models: Option<Vec<String>>,
+    /// True while a `list_models` task is in flight.
+    pub models_loading: bool,
+
+    // ── Async channels ────────────────────────────────────────────────────────
     /// Receives LlmEvents forwarded from the active streaming task.
     pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<LlmEvent>,
     event_tx: tokio::sync::mpsc::UnboundedSender<LlmEvent>,
+    /// Receives model lists forwarded from `list_models` tasks.
+    pub(crate) models_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<String>>,
+    models_tx: tokio::sync::mpsc::UnboundedSender<Vec<String>>,
 }
 
 impl App {
     pub fn new(initial_model: impl Into<String>) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (models_tx, models_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             messages: Vec::new(),
             textarea: Self::make_textarea(),
@@ -43,81 +56,115 @@ impl App {
             streaming: false,
             system_prompt: None,
             current_model: initial_model.into(),
-            slash_completions: Vec::new(),
-            slash_selected: 0,
+            completions: Vec::new(),
+            completion_selected: 0,
+            available_models: None,
+            models_loading: false,
             event_rx,
             event_tx,
+            models_rx,
+            models_tx,
         }
     }
 
-    /// Create a fresh, unstyled textarea. Visual styles are applied by `ui::draw`.
     fn make_textarea() -> TextArea<'static> {
         TextArea::default()
     }
 
     /// Reset the input area to a blank state between submissions.
-    /// Also clears any active slash-completion state.
+    /// Also clears any active completion state.
     pub fn reset_textarea(&mut self) {
         self.textarea = Self::make_textarea();
-        self.slash_completions.clear();
-        self.slash_selected = 0;
+        self.completions.clear();
+        self.completion_selected = 0;
     }
 
     /// True when the input is a single line beginning with `/`.
-    /// Used to decide whether to submit to the LLM or handle as a command.
     pub fn in_slash_mode(&self) -> bool {
         let lines = self.textarea.lines();
         lines.len() == 1 && lines[0].trim_start().starts_with('/')
     }
 
-    // ── Slash-completion helpers ──────────────────────────────────────────────
+    // ── Completion helpers ────────────────────────────────────────────────────
 
-    /// Recompute `slash_completions` from the current textarea content.
-    /// Call this after every keystroke that may change the input.
-    pub fn update_slash_state(&mut self) {
+    /// Recompute the completion list from the current textarea content and
+    /// cached model list. Call this after every keystroke.
+    pub fn update_completions(&mut self) {
         let lines = self.textarea.lines().to_vec();
         let input = if lines.len() == 1 {
             lines[0].trim().to_string()
         } else {
             String::new()
         };
-        let new_completions = commands::completions_for(&input);
-        // Reset selection to 0 whenever the candidate list changes length.
-        if new_completions.len() != self.slash_completions.len() {
-            self.slash_selected = 0;
+        let available = self.available_models.as_deref();
+        let loading = self.models_loading;
+        let new = commands::completions_for(&input, available, loading);
+
+        if new.len() != self.completions.len() {
+            self.completion_selected = 0;
         }
-        self.slash_completions = new_completions;
+        self.completions = new;
     }
 
-    /// Move the highlighted completion down (wraps around).
-    pub fn slash_select_next(&mut self) {
-        let len = self.slash_completions.len();
+    /// Returns true if a model-list fetch should be triggered now.
+    /// This is the case when the user has typed `/model ` but the list has
+    /// not been fetched yet and no fetch is currently in flight.
+    pub fn should_fetch_models(&self) -> bool {
+        if self.available_models.is_some() || self.models_loading {
+            return false;
+        }
+        let lines = self.textarea.lines();
+        lines.len() == 1 && lines[0].trim_start().starts_with("/model ")
+    }
+
+    /// Spawn a background task to fetch the model list from the provider.
+    pub fn start_model_fetch<P: LlmProvider + Send + Sync + 'static>(
+        &mut self,
+        provider: &Arc<P>,
+    ) {
+        self.models_loading = true;
+        let future = provider.list_models();
+        let tx = self.models_tx.clone();
+        tokio::spawn(async move {
+            let models = future.await;
+            let _ = tx.send(models);
+        });
+    }
+
+    /// Store a freshly fetched model list and refresh completions.
+    pub fn apply_model_list(&mut self, models: Vec<String>) {
+        self.available_models = Some(models);
+        self.models_loading = false;
+        self.update_completions();
+    }
+
+    /// Navigate the completion selection down (wraps around).
+    pub fn completion_select_next(&mut self) {
+        let len = self.completions.len();
         if len > 0 {
-            self.slash_selected = (self.slash_selected + 1) % len;
+            self.completion_selected = (self.completion_selected + 1) % len;
         }
     }
 
-    /// Move the highlighted completion up (wraps around).
-    pub fn slash_select_prev(&mut self) {
-        let len = self.slash_completions.len();
+    /// Navigate the completion selection up (wraps around).
+    pub fn completion_select_prev(&mut self) {
+        let len = self.completions.len();
         if len > 0 {
-            self.slash_selected = (self.slash_selected + len - 1) % len;
+            self.completion_selected = (self.completion_selected + len - 1) % len;
         }
     }
 
-    /// Replace the textarea content with the selected command's usage stub
-    /// and move the cursor to the end of the line.
-    pub fn slash_complete(&mut self) {
-        if let Some(cmd) = self.slash_completions.get(self.slash_selected) {
-            let text = if cmd.takes_arg {
-                format!("/{} ", cmd.name)
-            } else {
-                format!("/{}", cmd.name)
-            };
-            self.textarea = TextArea::new(vec![text]);
-            self.textarea.move_cursor(CursorMove::End);
-            self.update_slash_state();
-        }
+    /// Replace the textarea with the selected item's `complete_to` text and
+    /// move the cursor to the end of the line. No-ops on loading indicators.
+    pub fn apply_completion(&mut self) {
+        let item = match self.completions.get(self.completion_selected) {
+            Some(i) if !i.loading && !i.complete_to.is_empty() => i,
+            _ => return,
+        };
+        let text = item.complete_to.clone();
+        self.textarea = TextArea::new(vec![text]);
+        self.textarea.move_cursor(CursorMove::End);
+        self.update_completions();
     }
 
     // ── Conversation management ───────────────────────────────────────────────
@@ -140,22 +187,13 @@ impl App {
             return;
         }
 
-        self.messages.push(Message {
-            role: Role::User,
-            content: trimmed,
-        });
-        self.messages.push(Message {
-            role: Role::Assistant,
-            content: String::new(),
-        });
+        self.messages.push(Message { role: Role::User, content: trimmed });
+        self.messages.push(Message { role: Role::Assistant, content: String::new() });
 
         self.reset_textarea();
         self.auto_scroll = true;
         self.streaming = true;
 
-        // Build the history to send: optional system message first, then all
-        // conversation messages except the trailing empty assistant placeholder
-        // that was just pushed above.
         let history: Vec<Message> = self
             .system_prompt
             .iter()
@@ -163,9 +201,6 @@ impl App {
             .chain(self.messages[..self.messages.len() - 1].iter().cloned())
             .collect();
 
-        // Obtain a stream from the provider — no channel required by the trait.
-        // We bridge it to our internal channel here so the event loop can drain
-        // it non-blockingly with try_recv().
         let mut stream = provider.stream_chat(history);
         let tx = self.event_tx.clone();
         tokio::spawn(async move {
@@ -182,31 +217,25 @@ impl App {
 
     // ── Scrolling ─────────────────────────────────────────────────────────────
 
-    /// Scroll up by one page. Disables auto-scroll.
     pub fn scroll_up(&mut self) {
         self.scroll_up_lines(self.last_log_height.max(1));
     }
 
-    /// Scroll up by `n` lines. Disables auto-scroll.
     pub fn scroll_up_lines(&mut self, n: usize) {
         self.auto_scroll = false;
         self.log_scroll = self.log_scroll.saturating_sub(n);
     }
 
-    /// Scroll down by `n` lines. Re-enables auto-scroll when reaching bottom.
     pub fn scroll_down_lines(&mut self, n: usize) {
         self.log_scroll = self.log_scroll.saturating_add(n);
-        // auto_scroll is re-enabled by draw() once log_scroll reaches max_scroll
     }
 
-    /// Scroll down by one page. Snaps to bottom and re-enables auto-scroll.
     pub fn scroll_down(&mut self) {
         self.auto_scroll = true;
     }
 
     // ── LLM event handling ────────────────────────────────────────────────────
 
-    /// Apply a single LLM event to the application state.
     pub fn apply_event(&mut self, ev: LlmEvent) {
         match ev {
             LlmEvent::Token(token) => {
@@ -226,7 +255,6 @@ impl App {
         }
     }
 
-    /// Drain the event channel and apply all pending LLM events.
     pub fn apply_events(&mut self) {
         while let Ok(ev) = self.event_rx.try_recv() {
             self.apply_event(ev);

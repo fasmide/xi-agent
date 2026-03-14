@@ -43,7 +43,8 @@ async fn main() -> io::Result<()> {
     let mut app = App::new(&current_model);
 
     // The outer loop re-enters `run` when the user changes the model with
-    // `/model <name>`, rebuilding the provider with the new model name.
+    // `/model <name>`, rebuilding the provider with the new model name while
+    // preserving the rest of the App state.
     loop {
         let provider = Arc::new(OllamaProvider::new(&base_url, &current_model));
         match run(&mut terminal, &mut app, &provider).await {
@@ -51,7 +52,9 @@ async fn main() -> io::Result<()> {
             Ok(RunResult::ChangeModel(name)) => {
                 app.current_model = name.clone();
                 current_model = name;
-                // Continue the loop — run() will be called again with a new provider.
+                // Invalidate the cached model list so the next `/model ` fetch
+                // reflects any changes since the last query.
+                app.available_models = None;
             }
         }
     }
@@ -71,9 +74,7 @@ async fn main() -> io::Result<()> {
 // ── Result type returned by the inner run loop ────────────────────────────────
 
 enum RunResult {
-    /// The user quit the application.
     Quit,
-    /// The user switched to a different model; restart with a new provider.
     ChangeModel(String),
 }
 
@@ -89,9 +90,6 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // Wait for either a terminal input event or an LLM token — whichever
-        // arrives first. The loop only wakes when there is real work to do;
-        // CPU usage is near zero while idle.
         tokio::select! {
             // ── Terminal input ────────────────────────────────────────────────
             Some(Ok(ev)) = crossterm_events.next() => {
@@ -104,7 +102,8 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
                             return Ok(RunResult::Quit);
                         }
 
-                        // Esc: dismiss slash popup if open, otherwise quit.
+                        // Esc: dismiss slash popup / clear input if in slash mode,
+                        // otherwise quit.
                         if key.code == KeyCode::Esc {
                             if app.in_slash_mode() {
                                 app.reset_textarea();
@@ -120,26 +119,26 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
 
                             // ── Up / Down: navigate completions or move cursor ──
                             KeyCode::Up => {
-                                if !app.slash_completions.is_empty() {
-                                    app.slash_select_prev();
+                                if !app.completions.is_empty() {
+                                    app.completion_select_prev();
                                 } else {
                                     app.textarea.input(Event::Key(key));
                                 }
                             }
                             KeyCode::Down => {
-                                if !app.slash_completions.is_empty() {
-                                    app.slash_select_next();
+                                if !app.completions.is_empty() {
+                                    app.completion_select_next();
                                 } else {
                                     app.textarea.input(Event::Key(key));
                                 }
                             }
 
-                            // ── Tab: complete to selected command ──────────────
+                            // ── Tab: expand selected completion into textarea ───
                             KeyCode::Tab => {
-                                if !app.slash_completions.is_empty() {
-                                    app.slash_complete();
+                                if !app.completions.is_empty() {
+                                    app.apply_completion();
                                 }
-                                // Tab is intentionally ignored when not in slash mode.
+                                // Intentionally ignored when no completions.
                             }
 
                             // ── Enter: execute command or submit to LLM ────────
@@ -149,8 +148,6 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
                                         .cloned()
                                         .unwrap_or_default();
                                     let input = input.trim().to_string();
-
-                                    // Always clear the input regardless of outcome.
                                     app.reset_textarea();
 
                                     match commands::parse(&input) {
@@ -164,7 +161,7 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
                                             return Ok(RunResult::ChangeModel(name));
                                         }
                                         Some(CommandAction::ModelNoArg) | None => {
-                                            // Unknown or incomplete command — just discard.
+                                            // Unknown or incomplete — discard silently.
                                         }
                                     }
                                 } else {
@@ -173,13 +170,18 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
                             }
                             KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => {
                                 app.textarea.insert_newline();
-                                app.update_slash_state();
+                                app.update_completions();
                             }
 
                             // ── All other keys: forward to textarea ────────────
                             _ => {
                                 app.textarea.input(Event::Key(key));
-                                app.update_slash_state();
+                                app.update_completions();
+                                // Lazily fetch the model list the first time the
+                                // user types "/model <space>".
+                                if app.should_fetch_models() {
+                                    app.start_model_fetch(provider);
+                                }
                             }
                         }
                     }
@@ -195,8 +197,12 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
             // ── LLM streaming events ──────────────────────────────────────────
             Some(ev) = app.event_rx.recv() => {
                 app.apply_event(ev);
-                // Drain any further tokens that arrived in the same batch.
                 app.apply_events();
+            }
+
+            // ── Model list fetched ────────────────────────────────────────────
+            Some(models) = app.models_rx.recv() => {
+                app.apply_model_list(models);
             }
         }
     }

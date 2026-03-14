@@ -30,29 +30,103 @@ pub static COMMANDS: &[SlashCommand] = &[
     },
 ];
 
-/// Return commands whose name matches the prefix typed after `/`.
+// ── Completion items ──────────────────────────────────────────────────────────
+
+/// A single entry in the completion popup.
+pub struct CompletionItem {
+    /// Primary text shown in the left column (command usage or model name).
+    pub label: String,
+    /// Secondary text shown in the right column (description or empty).
+    pub detail: String,
+    /// Text to place in the textarea when this item is selected via Tab/Enter.
+    /// Empty for non-interactive items (e.g. the loading indicator).
+    pub complete_to: String,
+    /// When true the item is a non-interactive status row (e.g. "fetching…").
+    pub loading: bool,
+}
+
+impl CompletionItem {
+    fn from_command(cmd: &SlashCommand) -> Self {
+        Self {
+            label: cmd.usage.to_string(),
+            detail: cmd.description.to_string(),
+            complete_to: if cmd.takes_arg {
+                format!("/{} ", cmd.name)
+            } else {
+                format!("/{}", cmd.name)
+            },
+            loading: false,
+        }
+    }
+
+    fn from_model(name: &str) -> Self {
+        Self {
+            label: name.to_string(),
+            detail: String::new(),
+            complete_to: format!("/model {}", name),
+            loading: false,
+        }
+    }
+
+    fn loading_indicator() -> Self {
+        Self {
+            label: "fetching models…".to_string(),
+            detail: String::new(),
+            complete_to: String::new(),
+            loading: true,
+        }
+    }
+}
+
+// ── Completion matching ───────────────────────────────────────────────────────
+
+/// Build the completion list for the current textarea `input`.
 ///
-/// Once the user has typed a space (entering the argument phase) only exact
-/// command-name matches are returned, so the popup becomes a single-row
-/// hint rather than a filtering list.
-pub fn completions_for(input: &str) -> Vec<&'static SlashCommand> {
+/// **Phase 1 — command name** (no space yet): filter `COMMANDS` by prefix.
+/// **Phase 2 — argument** (space present after `/model`): filter available
+/// model names by the typed prefix, or show a loading indicator while the
+/// model list is being fetched.
+pub fn completions_for(
+    input: &str,
+    available_models: Option<&[String]>,
+    models_loading: bool,
+) -> Vec<CompletionItem> {
     let Some(rest) = input.strip_prefix('/') else {
         return vec![];
     };
-    let (prefix, exact_only) = match rest.find(' ') {
-        Some(pos) => (&rest[..pos], true),
-        None => (rest, false),
-    };
-    COMMANDS
-        .iter()
-        .filter(|c| {
-            if exact_only {
-                c.name == prefix
-            } else {
-                c.name.starts_with(prefix)
+
+    match rest.find(' ') {
+        // ── Phase 2: argument ─────────────────────────────────────────────────
+        Some(space_pos) => {
+            let cmd = &rest[..space_pos];
+            let arg = rest[space_pos + 1..].trim_start();
+
+            match cmd {
+                "model" => {
+                    if models_loading {
+                        vec![CompletionItem::loading_indicator()]
+                    } else if let Some(models) = available_models {
+                        models
+                            .iter()
+                            .filter(|m| m.starts_with(arg))
+                            .map(|m| CompletionItem::from_model(m))
+                            .collect()
+                    } else {
+                        // Models not fetched yet — will trigger a fetch via
+                        // App::should_fetch_models(); show nothing for now.
+                        vec![]
+                    }
+                }
+                _ => vec![],
             }
-        })
-        .collect()
+        }
+        // ── Phase 1: command name ─────────────────────────────────────────────
+        None => COMMANDS
+            .iter()
+            .filter(|c| c.name.starts_with(rest))
+            .map(CompletionItem::from_command)
+            .collect(),
+    }
 }
 
 // ── Command parsing ───────────────────────────────────────────────────────────

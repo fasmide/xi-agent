@@ -6,7 +6,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::{app::App, commands::SlashCommand, llm::Role};
+use crate::{app::App, commands::CompletionItem, llm::Role};
 
 /// Background colour of the input panel.
 const INPUT_BG: Color = Color::Rgb(30, 30, 40);
@@ -67,8 +67,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let max_input_height = (terminal_height * 40 / 100).max(1);
     let input_height = input_line_count.min(max_input_height) as u16;
 
-    // Completion popup: one row per matching command (0 when no completions).
-    let completion_height = app.slash_completions.len() as u16;
+    // Completion popup: one row per matching completion (0 when no completions).
+    let completion_height = app.completions.len() as u16;
 
     // Layout: chat log | completion popup | top halfblock | input | bottom halfblock
     let chunks = Layout::default()
@@ -137,8 +137,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // ── Completion popup ──────────────────────────────────────────────────────
     if completion_height > 0 {
         let popup_lines = build_completion_lines(
-            &app.slash_completions,
-            app.slash_selected,
+            &app.completions,
+            app.completion_selected,
             width,
         );
         f.render_widget(Paragraph::new(popup_lines), completion_area);
@@ -160,42 +160,70 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
 // ── Completion popup rendering ────────────────────────────────────────────────
 
-/// Build one `Line` per matching command for the completion popup.
+/// Build one `Line` per completion item for the popup.
 ///
-/// Layout per row:  `  <usage padded>  —  <description> <fill>`
+/// Layout per row:  `  <label padded>  —  <detail> <fill>`
+/// Loading rows are rendered in a dim italic style with no separator.
 fn build_completion_lines(
-    completions: &[&SlashCommand],
+    completions: &[CompletionItem],
     selected: usize,
     terminal_width: usize,
 ) -> Vec<Line<'static>> {
-    // Align descriptions by padding usage to the longest usage string.
-    let usage_col = completions
+    // Align the detail column by padding labels to the longest label string.
+    let label_col = completions
         .iter()
-        .map(|c| c.usage.len())
+        .filter(|c| !c.loading)
+        .map(|c| c.label.len())
         .max()
         .unwrap_or(0)
-        .max(8); // minimum column width
+        .max(8);
 
     const SEP: &str = "  —  ";
-    const INDENT: &str = "  "; // left indent
+    const INDENT: &str = "  ";
 
     completions
         .iter()
         .enumerate()
-        .map(|(i, cmd)| {
+        .map(|(i, item)| {
             let bg = if i == selected { COMPLETION_SEL_BG } else { COMPLETION_BG };
-            let usage_padded = format!("{:<width$}", cmd.usage, width = usage_col);
-            let desc = cmd.description;
-            let used = INDENT.len() + usage_col + SEP.len() + desc.len();
+
+            if item.loading {
+                // Non-interactive loading indicator — dim, full-width fill.
+                let fill = " ".repeat(terminal_width.saturating_sub(INDENT.len() + item.label.len()));
+                return Line::from(vec![
+                    Span::styled(INDENT, Style::default().bg(bg)),
+                    Span::styled(
+                        item.label.clone(),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .bg(bg)
+                            .add_modifier(ratatui::style::Modifier::ITALIC),
+                    ),
+                    Span::styled(fill, Style::default().bg(bg)),
+                ]);
+            }
+
+            let label_padded = format!("{:<width$}", item.label, width = label_col);
+            let used = INDENT.len()
+                + label_col
+                + if item.detail.is_empty() { 0 } else { SEP.len() + item.detail.len() };
             let fill = " ".repeat(terminal_width.saturating_sub(used));
 
-            Line::from(vec![
-                Span::styled(INDENT, Style::default().bg(bg)),
-                Span::styled(usage_padded, Style::default().fg(COMPLETION_CMD_FG).bg(bg)),
-                Span::styled(SEP, Style::default().fg(Color::DarkGray).bg(bg)),
-                Span::styled(desc.to_string(), Style::default().fg(COMPLETION_DESC_FG).bg(bg)),
-                Span::styled(fill, Style::default().bg(bg)),
-            ])
+            if item.detail.is_empty() {
+                Line::from(vec![
+                    Span::styled(INDENT, Style::default().bg(bg)),
+                    Span::styled(label_padded, Style::default().fg(COMPLETION_CMD_FG).bg(bg)),
+                    Span::styled(fill, Style::default().bg(bg)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(INDENT, Style::default().bg(bg)),
+                    Span::styled(label_padded, Style::default().fg(COMPLETION_CMD_FG).bg(bg)),
+                    Span::styled(SEP, Style::default().fg(Color::DarkGray).bg(bg)),
+                    Span::styled(item.detail.clone(), Style::default().fg(COMPLETION_DESC_FG).bg(bg)),
+                    Span::styled(fill, Style::default().bg(bg)),
+                ])
+            }
         })
         .collect()
 }

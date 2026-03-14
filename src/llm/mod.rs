@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{future::Future, pin::Pin};
 
 /// A single message in the conversation history.
 #[derive(Debug, Clone)]
@@ -39,6 +39,10 @@ pub enum LlmEvent {
 /// suitable for passing across thread boundaries and storing in `App`.
 pub type LlmStream = Pin<Box<dyn futures_util::Stream<Item = LlmEvent> + Send + 'static>>;
 
+/// A boxed future that resolves to a list of model names.
+/// Returned by `LlmProvider::list_models`.
+pub type ModelListFuture = Pin<Box<dyn Future<Output = Vec<String>> + Send + 'static>>;
+
 /// Trait every LLM backend must implement.
 ///
 /// `stream_chat` returns an `LlmStream` rather than accepting a channel
@@ -46,6 +50,13 @@ pub type LlmStream = Pin<Box<dyn futures_util::Stream<Item = LlmEvent> + Send + 
 /// and makes implementors independently testable by collecting the stream.
 pub trait LlmProvider: Send + Sync {
     fn stream_chat(&self, messages: Vec<Message>) -> LlmStream;
+
+    /// Return the list of model names available from this provider.
+    /// The default implementation returns an empty list; providers that
+    /// support model discovery (e.g. Ollama) should override this.
+    fn list_models(&self) -> ModelListFuture {
+        Box::pin(async { vec![] })
+    }
 }
 
 pub mod ollama;

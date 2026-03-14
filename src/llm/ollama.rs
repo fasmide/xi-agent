@@ -2,7 +2,7 @@ use anyhow::Context;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::{LlmEvent, LlmProvider, LlmStream, Message};
+use super::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture};
 
 pub struct OllamaProvider {
     pub base_url: String,
@@ -30,7 +30,7 @@ impl OllamaProvider {
     }
 }
 
-// ── Serde types for the Ollama /api/chat endpoint ────────────────────────────
+// ── Serde types ───────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct ChatRequest {
@@ -55,6 +55,17 @@ struct ChatChunk {
 #[derive(Deserialize)]
 struct ChunkMessage {
     content: String,
+}
+
+// Serde types for the Ollama /api/tags endpoint.
+#[derive(Deserialize)]
+struct TagsResponse {
+    models: Vec<TagModel>,
+}
+
+#[derive(Deserialize)]
+struct TagModel {
+    name: String,
 }
 
 // ── Provider implementation ───────────────────────────────────────────────────
@@ -142,6 +153,22 @@ impl LlmProvider for OllamaProvider {
 
             // Stream ended without a done=true (shouldn't happen with Ollama, but be safe).
             yield LlmEvent::Done;
+        })
+    }
+
+    fn list_models(&self) -> ModelListFuture {
+        let url = format!("{}/api/tags", self.base_url);
+        let client = self.client.clone();
+        Box::pin(async move {
+            let response = match client.get(&url).send().await {
+                Ok(r) => r,
+                Err(_) => return vec![],
+            };
+            let tags: TagsResponse = match response.json().await {
+                Ok(t) => t,
+                Err(_) => return vec![],
+            };
+            tags.models.into_iter().map(|m| m.name).collect()
         })
     }
 }

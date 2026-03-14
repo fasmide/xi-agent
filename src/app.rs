@@ -2,8 +2,9 @@ use std::sync::Arc;
 use tui_textarea::{CursorMove, TextArea};
 
 use crate::{
+    agent::{run_agent_loop, types::AgentEvent, AgentLoopConfig},
     commands::{self, CompletionItem},
-    llm::{LlmEvent, LlmProvider, Message, Role},
+    llm::{Message, Role, LlmProvider},
 };
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -21,6 +22,8 @@ pub struct App {
     pub system_prompt: Option<String>,
     /// Currently active model name (mirrors the provider; updated on `/model`).
     pub current_model: String,
+    /// Agent loop configuration (tools, hooks, max_turns).
+    pub agent_config: AgentLoopConfig,
 
     // ── Completion popup ──────────────────────────────────────────────────────
     /// Items to display in the completion popup (empty = popup hidden).
@@ -34,17 +37,25 @@ pub struct App {
     /// True while a `list_models` task is in flight.
     pub models_loading: bool,
 
+    // ── Model selection menu ───────────────────────────────────────────────────
+    /// True when the full-screen model picker is active.
+    pub selection_mode: bool,
+    /// Items shown in the selection menu.
+    pub selection_items: Vec<CompletionItem>,
+    /// Index of the currently highlighted selection row.
+    pub selection_selected: usize,
+
     // ── Async channels ────────────────────────────────────────────────────────
-    /// Receives LlmEvents forwarded from the active streaming task.
-    pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<LlmEvent>,
-    event_tx: tokio::sync::mpsc::UnboundedSender<LlmEvent>,
+    /// Receives AgentEvents forwarded from the active agent loop task.
+    pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+    event_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
     /// Receives model lists forwarded from `list_models` tasks.
     pub(crate) models_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<String>>,
     models_tx: tokio::sync::mpsc::UnboundedSender<Vec<String>>,
 }
 
 impl App {
-    pub fn new(initial_model: impl Into<String>) -> Self {
+    pub fn new(initial_model: impl Into<String>, agent_config: AgentLoopConfig) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (models_tx, models_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
@@ -56,10 +67,14 @@ impl App {
             streaming: false,
             system_prompt: None,
             current_model: initial_model.into(),
+            agent_config,
             completions: Vec::new(),
             completion_selected: 0,
             available_models: None,
             models_loading: false,
+            selection_mode: false,
+            selection_items: Vec::new(),
+            selection_selected: 0,
             event_rx,
             event_tx,
             models_rx,
@@ -136,6 +151,20 @@ impl App {
         self.available_models = Some(models);
         self.models_loading = false;
         self.update_completions();
+        // Populate (or refresh) the selection menu if it is currently shown.
+        if self.selection_mode {
+            self.selection_items = self
+                .available_models
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|m| commands::CompletionItem::from_model(m))
+                .collect();
+            // Keep the selected index in bounds.
+            if self.selection_selected >= self.selection_items.len() {
+                self.selection_selected = 0;
+            }
+        }
     }
 
     /// Navigate the completion selection down (wraps around).
@@ -167,6 +196,66 @@ impl App {
         self.update_completions();
     }
 
+    // ── Selection menu ────────────────────────────────────────────────────────
+
+    /// Enter the model selection menu, pre-populating items from the cache if
+    /// available or showing a loading indicator otherwise.
+    pub fn enter_selection_mode(&mut self) {
+        self.reset_textarea();
+        self.selection_mode = true;
+        self.selection_selected = 0;
+        self.selection_items = if let Some(models) = &self.available_models {
+            models
+                .iter()
+                .map(|m| commands::CompletionItem::from_model(m))
+                .collect()
+        } else {
+            vec![commands::CompletionItem::loading_indicator()]
+        };
+    }
+
+    /// Dismiss the selection menu without applying a choice.
+    pub fn exit_selection_mode(&mut self) {
+        self.selection_mode = false;
+        self.selection_items.clear();
+        self.selection_selected = 0;
+    }
+
+    /// Returns true when a model fetch should be triggered for the selection
+    /// menu (models not yet loaded, no fetch in flight).
+    pub fn should_fetch_models_for_selection(&self) -> bool {
+        self.selection_mode && self.available_models.is_none() && !self.models_loading
+    }
+
+    /// Navigate the selection menu down (wraps; skips loading rows).
+    pub fn selection_select_next(&mut self) {
+        let len = self.selection_items.len();
+        if len > 0 {
+            self.selection_selected = (self.selection_selected + 1) % len;
+        }
+    }
+
+    /// Navigate the selection menu up (wraps; skips loading rows).
+    pub fn selection_select_prev(&mut self) {
+        let len = self.selection_items.len();
+        if len > 0 {
+            self.selection_selected = (self.selection_selected + len - 1) % len;
+        }
+    }
+
+    /// Confirm the currently highlighted selection.
+    /// Returns the chosen model name, or `None` if the row is a loading
+    /// indicator or no valid item is highlighted.
+    pub fn apply_selection(&mut self) -> Option<String> {
+        let item = self.selection_items.get(self.selection_selected)?;
+        if item.loading || item.label.is_empty() {
+            return None;
+        }
+        let model = item.label.clone();
+        self.exit_selection_mode();
+        Some(model)
+    }
+
     // ── Conversation management ───────────────────────────────────────────────
 
     /// Clear the conversation history and reset the input area.
@@ -178,7 +267,7 @@ impl App {
 
     // ── LLM submission ────────────────────────────────────────────────────────
 
-    /// Take the textarea content and start an LLM streaming request.
+    /// Take the textarea content and start the agent loop.
     pub fn submit<P: LlmProvider + Send + Sync + 'static>(&mut self, provider: &Arc<P>) {
         let lines: Vec<String> = self.textarea.lines().to_vec();
         let text = lines.join("\n");
@@ -187,31 +276,38 @@ impl App {
             return;
         }
 
-        self.messages.push(Message { role: Role::User, content: trimmed, thinking: None });
-        self.messages.push(Message { role: Role::Assistant, content: String::new(), thinking: None });
-
+        self.messages.push(Message::user(trimmed));
         self.reset_textarea();
         self.auto_scroll = true;
         self.streaming = true;
 
-        let history: Vec<Message> = self
+        // Build the LLM history: system prompt (if any) + all display messages.
+        let mut llm_messages: Vec<Message> = self
             .system_prompt
             .iter()
-            .map(|s| Message { role: Role::System, content: s.clone(), thinking: None })
-            .chain(self.messages[..self.messages.len() - 1].iter().cloned())
+            .map(|s| Message::system(s))
+            .chain(self.messages.iter().cloned())
             .collect();
 
-        let mut stream = provider.stream_chat(history);
+        // The agent loop manages assistant/tool messages internally;
+        // strip any trailing assistant placeholder that might exist.
+        if matches!(llm_messages.last().map(|m| &m.role), Some(Role::Assistant))
+            && llm_messages.last().map(|m| m.content.is_empty()).unwrap_or(false)
+        {
+            llm_messages.pop();
+        }
+
+        let config = AgentLoopConfig {
+            tools: self.agent_config.tools.clone(),
+            before_tool_call: None,
+            after_tool_call: None,
+            max_turns: self.agent_config.max_turns,
+        };
+
+        let provider = Arc::clone(provider);
         let tx = self.event_tx.clone();
         tokio::spawn(async move {
-            use futures_util::StreamExt;
-            while let Some(event) = stream.next().await {
-                let done = matches!(event, LlmEvent::Done | LlmEvent::Error(_));
-                let _ = tx.send(event);
-                if done {
-                    break;
-                }
-            }
+            run_agent_loop(llm_messages, config, provider, tx).await;
         });
     }
 
@@ -234,29 +330,47 @@ impl App {
         self.auto_scroll = true;
     }
 
-    // ── LLM event handling ────────────────────────────────────────────────────
+    // ── Agent event handling ──────────────────────────────────────────────────
 
-    pub fn apply_event(&mut self, ev: LlmEvent) {
+    pub fn apply_event(&mut self, ev: AgentEvent) {
         match ev {
-            LlmEvent::ThinkingToken(token) => {
+            AgentEvent::ThinkingToken(token) => {
+                self.ensure_assistant_message();
                 if let Some(last) = self.messages.last_mut() {
                     last.thinking.get_or_insert_with(String::new).push_str(&token);
                 }
             }
-            LlmEvent::Token(token) => {
+            AgentEvent::TextToken(token) => {
+                self.ensure_assistant_message();
                 if let Some(last) = self.messages.last_mut() {
                     last.content.push_str(&token);
                 }
             }
-            LlmEvent::Done => {
+            AgentEvent::ToolCallStart { name, args } => {
+                self.messages.push(Message::tool_call("", name, args));
+            }
+            AgentEvent::ToolCallEnd { result, .. } => {
+                self.messages.push(Message::tool_result("", result.content, result.is_error));
+            }
+            AgentEvent::TurnEnd => {
+                // Reserved for future use (e.g. visual separator between turns).
+            }
+            AgentEvent::Done => {
                 self.streaming = false;
             }
-            LlmEvent::Error(e) => {
-                if let Some(last) = self.messages.last_mut() {
-                    last.content = format!("[Error: {e}]");
-                }
+            AgentEvent::Error(e) => {
+                self.messages.push(Message::assistant(format!("[Error: {e}]")));
                 self.streaming = false;
             }
+        }
+    }
+
+    /// Ensure the last message is an (possibly empty) assistant message.
+    /// Pushes a new one if the last message is not an assistant message.
+    fn ensure_assistant_message(&mut self) {
+        match self.messages.last().map(|m| &m.role) {
+            Some(Role::Assistant) => {}
+            _ => self.messages.push(Message::assistant("")),
         }
     }
 

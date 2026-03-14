@@ -13,10 +13,12 @@ use std::{io, sync::Arc};
 
 mod app;
 mod commands;
+mod agent;
 mod llm;
 mod ui;
 
 use app::App;
+use agent::{tools::register_builtin_tools, AgentLoopConfig};
 use commands::CommandAction;
 use llm::{ollama::OllamaProvider, LlmProvider};
 
@@ -40,7 +42,12 @@ async fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(&current_model);
+    let mut app = App::new(&current_model, AgentLoopConfig {
+        tools: register_builtin_tools(),
+        before_tool_call: None,
+        after_tool_call: None,
+        max_turns: 20,
+    });
 
     // The outer loop re-enters `run` when the user changes the model with
     // `/model <name>`, rebuilding the provider with the new model name while
@@ -102,6 +109,22 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
                             return Ok(RunResult::Quit);
                         }
 
+                        // ── Selection menu mode ───────────────────────────────
+                        if app.selection_mode {
+                            match key.code {
+                                KeyCode::Up => app.selection_select_prev(),
+                                KeyCode::Down => app.selection_select_next(),
+                                KeyCode::Enter if key.modifiers.is_empty() => {
+                                    if let Some(model) = app.apply_selection() {
+                                        return Ok(RunResult::ChangeModel(model));
+                                    }
+                                }
+                                KeyCode::Esc => app.exit_selection_mode(),
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         // Esc: dismiss slash popup / clear input if in slash mode,
                         // otherwise quit.
                         if key.code == KeyCode::Esc {
@@ -160,8 +183,16 @@ async fn run<P: LlmProvider + Send + Sync + 'static>(
                                         Some(CommandAction::Model(name)) => {
                                             return Ok(RunResult::ChangeModel(name));
                                         }
-                                        Some(CommandAction::ModelNoArg) | None => {
-                                            // Unknown or incomplete — discard silently.
+                                        Some(CommandAction::ModelNoArg) => {
+                                            // No argument given — open the interactive
+                                            // model selection menu.
+                                            app.enter_selection_mode();
+                                            if app.should_fetch_models_for_selection() {
+                                                app.start_model_fetch(provider);
+                                            }
+                                        }
+                                        None => {
+                                            // Unknown command — discard silently.
                                         }
                                     }
                                 } else {

@@ -1,8 +1,7 @@
-use anyhow::Context;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture};
+use super::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role, ToolDefinition};
 
 pub struct OllamaProvider {
     pub base_url: String,
@@ -40,11 +39,49 @@ struct ChatRequest {
 }
 
 #[derive(Serialize)]
+struct ChatRequestWithTools {
+    model: String,
+    messages: Vec<OllamaMessage>,
+    tools: Vec<OllamaToolDef>,
+    stream: bool,
+}
+
+#[derive(Serialize)]
 struct OllamaMessage {
     role: &'static str,
+    #[serde(skip_serializing_if = "String::is_empty")]
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<String>,
+    /// Populated for Role::ToolCall messages (assistant turn with tool calls).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OllamaToolCallItem>>,
+}
+
+/// A single tool call entry inside an assistant message.
+#[derive(Serialize)]
+struct OllamaToolCallItem {
+    function: OllamaToolCallFunction,
+}
+
+#[derive(Serialize)]
+struct OllamaToolCallFunction {
+    name: String,
+    arguments: serde_json::Value,
+}
+
+/// Tool definition sent in the request.
+#[derive(Serialize)]
+struct OllamaToolDef {
+    r#type: &'static str,
+    function: OllamaFunctionDef,
+}
+
+#[derive(Serialize)]
+struct OllamaFunctionDef {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -60,6 +97,20 @@ struct ChunkMessage {
     content: String,
     #[serde(default)]
     thinking: String,
+    /// Present when the model decides to call a tool.
+    #[serde(default)]
+    tool_calls: Vec<ToolCallChunk>,
+}
+
+#[derive(Deserialize)]
+struct ToolCallChunk {
+    function: ToolCallFunction,
+}
+
+#[derive(Deserialize)]
+struct ToolCallFunction {
+    name: String,
+    arguments: serde_json::Value,
 }
 
 // Serde types for the Ollama /api/tags endpoint.
@@ -75,16 +126,72 @@ struct TagModel {
 
 // ── History serialisation ─────────────────────────────────────────────────────
 
-/// Build the Ollama message for a past assistant turn.
-/// If the message has associated thinking content, pass it in the `thinking`
-/// field so reasoning models see their prior chain of thought in multi-turn
-/// conversations.
+/// Convert a `Message` to an `OllamaMessage` for inclusion in a chat request.
 fn to_ollama_message(msg: &Message) -> OllamaMessage {
-    OllamaMessage {
-        role: msg.role.as_str(),
-        content: msg.content.clone(),
-        thinking: msg.thinking.clone().filter(|t| !t.is_empty()),
+    match msg.role {
+        Role::ToolCall => OllamaMessage {
+            role: "assistant",
+            content: String::new(),
+            thinking: None,
+            tool_calls: Some(vec![OllamaToolCallItem {
+                function: OllamaToolCallFunction {
+                    name: msg.tool_name.clone().unwrap_or_default(),
+                    arguments: msg.tool_args.clone().unwrap_or(serde_json::Value::Null),
+                },
+            }]),
+        },
+        Role::ToolResult => OllamaMessage {
+            role: "tool",
+            content: msg.content.clone(),
+            thinking: None,
+            tool_calls: None,
+        },
+        _ => OllamaMessage {
+            role: msg.role.as_str(),
+            content: msg.content.clone(),
+            thinking: msg.thinking.clone().filter(|t| !t.is_empty()),
+            tool_calls: None,
+        },
     }
+}
+
+// ── NDJSON helper ─────────────────────────────────────────────────────────────
+//
+// Parses an Ollama NDJSON chunk and emits the corresponding LlmEvents.
+// Returns `true` when the stream is finished (done=true or error).
+fn parse_ndjson_line(line: &str, events: &mut Vec<LlmEvent>) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+    match serde_json::from_str::<ChatChunk>(line) {
+        Ok(chunk) => {
+            if !chunk.message.tool_calls.is_empty() {
+                for (i, tc) in chunk.message.tool_calls.iter().enumerate() {
+                    events.push(LlmEvent::ToolCall {
+                        id: format!("call_{i}"),
+                        name: tc.function.name.clone(),
+                        args: tc.function.arguments.clone(),
+                    });
+                }
+            } else {
+                if !chunk.message.thinking.is_empty() {
+                    events.push(LlmEvent::ThinkingToken(chunk.message.thinking.clone()));
+                }
+                if !chunk.message.content.is_empty() {
+                    events.push(LlmEvent::Token(chunk.message.content.clone()));
+                }
+            }
+            if chunk.done {
+                events.push(LlmEvent::Done);
+                return true;
+            }
+        }
+        Err(e) => {
+            events.push(LlmEvent::Error(format!("Parse error: {e}")));
+            return true;
+        }
+    }
+    false
 }
 
 // ── Provider implementation ───────────────────────────────────────────────────
@@ -107,7 +214,7 @@ impl LlmProvider for OllamaProvider {
                 .json(&body)
                 .send()
                 .await
-                .with_context(|| format!("Failed to connect to Ollama at {url}"))
+                .map_err(|e| format!("Failed to connect to Ollama at {url}: {e}"))
             {
                 Ok(r) => r,
                 Err(e) => {
@@ -124,50 +231,93 @@ impl LlmProvider for OllamaProvider {
             }
 
             let mut byte_stream = response.bytes_stream();
-
-            // Ollama streams NDJSON: one JSON object per line.
             let mut buf = String::new();
             while let Some(chunk) = byte_stream.next().await {
-                let bytes = match chunk.context("Error reading stream chunk") {
+                let bytes = match chunk {
                     Ok(b) => b,
-                    Err(e) => {
-                        yield LlmEvent::Error(e.to_string());
-                        return;
-                    }
+                    Err(e) => { yield LlmEvent::Error(e.to_string()); return; }
                 };
                 buf.push_str(&String::from_utf8_lossy(&bytes));
-
-                // Process every complete NDJSON line in the buffer.
                 while let Some(pos) = buf.find('\n') {
                     let line = buf[..pos].trim().to_string();
                     buf.drain(..=pos);
-
-                    if line.is_empty() {
-                        continue;
-                    }
-
-                    match serde_json::from_str::<ChatChunk>(&line) {
-                        Ok(chunk) => {
-                            if !chunk.message.thinking.is_empty() {
-                                yield LlmEvent::ThinkingToken(chunk.message.thinking);
-                            }
-                            if !chunk.message.content.is_empty() {
-                                yield LlmEvent::Token(chunk.message.content);
-                            }
-                            if chunk.done {
-                                yield LlmEvent::Done;
-                                return;
-                            }
-                        }
-                        Err(e) => {
-                            yield LlmEvent::Error(format!("Parse error: {e}"));
-                            return;
-                        }
-                    }
+                    let mut events = Vec::new();
+                    let done = parse_ndjson_line(&line, &mut events);
+                    for ev in events { yield ev; }
+                    if done { return; }
                 }
             }
+            yield LlmEvent::Done;
+        })
+    }
 
-            // Stream ended without done=true.
+    fn stream_chat_with_tools(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+    ) -> LlmStream {
+        let url = format!("{}/api/chat", self.base_url);
+        let model = self.model.clone();
+        let client = self.client.clone();
+
+        Box::pin(async_stream::stream! {
+            let ollama_tools: Vec<OllamaToolDef> = tools
+                .iter()
+                .map(|t| OllamaToolDef {
+                    r#type: "function",
+                    function: OllamaFunctionDef {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        parameters: t.parameters.clone(),
+                    },
+                })
+                .collect();
+
+            let body = ChatRequestWithTools {
+                model,
+                messages: messages.iter().map(to_ollama_message).collect(),
+                tools: ollama_tools,
+                stream: true,
+            };
+
+            let response = match client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to connect to Ollama at {url}: {e}"))
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    yield LlmEvent::Error(e.to_string());
+                    return;
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let text = response.text().await.unwrap_or_default();
+                yield LlmEvent::Error(format!("Ollama returned {status}: {text}"));
+                return;
+            }
+
+            let mut byte_stream = response.bytes_stream();
+            let mut buf = String::new();
+            while let Some(chunk) = byte_stream.next().await {
+                let bytes = match chunk {
+                    Ok(b) => b,
+                    Err(e) => { yield LlmEvent::Error(e.to_string()); return; }
+                };
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim().to_string();
+                    buf.drain(..=pos);
+                    let mut events = Vec::new();
+                    let done = parse_ndjson_line(&line, &mut events);
+                    for ev in events { yield ev; }
+                    if done { return; }
+                }
+            }
             yield LlmEvent::Done;
         })
     }

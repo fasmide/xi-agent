@@ -8,6 +8,88 @@ pub struct Message {
     /// Chain-of-thought / "thinking" content emitted before the answer.
     /// `None` for messages that carry no thinking output.
     pub thinking: Option<String>,
+    // ── Tool-call fields (Role::ToolCall) ─────────────────────────────────────
+    /// Opaque identifier linking a tool call to its result.
+    pub tool_call_id: Option<String>,
+    /// Name of the tool being called or that produced this result.
+    pub tool_name: Option<String>,
+    /// Arguments passed to the tool (JSON object).
+    pub tool_args: Option<serde_json::Value>,
+    // ── Tool-result fields (Role::ToolResult) ─────────────────────────────────
+    /// True when the tool returned an error.
+    pub is_error: bool,
+}
+
+impl Message {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            thinking: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_args: None,
+            is_error: false,
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            thinking: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_args: None,
+            is_error: false,
+        }
+    }
+
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::System,
+            content: content.into(),
+            thinking: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_args: None,
+            is_error: false,
+        }
+    }
+
+    /// An assistant message that contains a tool call request.
+    pub fn tool_call(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        args: serde_json::Value,
+    ) -> Self {
+        Self {
+            role: Role::ToolCall,
+            content: String::new(),
+            thinking: None,
+            tool_call_id: Some(id.into()),
+            tool_name: Some(name.into()),
+            tool_args: Some(args),
+            is_error: false,
+        }
+    }
+
+    /// A tool result message sent back to the model.
+    pub fn tool_result(
+        call_id: impl Into<String>,
+        content: impl Into<String>,
+        is_error: bool,
+    ) -> Self {
+        Self {
+            role: Role::ToolResult,
+            content: content.into(),
+            thinking: None,
+            tool_call_id: Some(call_id.into()),
+            tool_name: None,
+            tool_args: None,
+            is_error,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,6 +97,10 @@ pub enum Role {
     System,
     User,
     Assistant,
+    /// An assistant turn that contains one or more tool-call requests.
+    ToolCall,
+    /// A tool result sent back to the model after executing a tool call.
+    ToolResult,
 }
 
 impl Role {
@@ -23,6 +109,8 @@ impl Role {
             Role::System => "system",
             Role::User => "user",
             Role::Assistant => "assistant",
+            Role::ToolCall => "assistant", // serialised as assistant with tool_calls
+            Role::ToolResult => "tool",
         }
     }
 }
@@ -34,10 +122,25 @@ pub enum LlmEvent {
     ThinkingToken(String),
     /// A token chunk from the model's answer.
     Token(String),
+    /// The model requested a tool call.
+    ToolCall {
+        id: String,
+        name: String,
+        args: serde_json::Value,
+    },
     /// The stream finished successfully.
     Done,
     /// The request failed.
     Error(String),
+}
+
+/// Description of a tool sent to the LLM so it can choose to call it.
+#[derive(Debug, Clone)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    /// JSON Schema object describing the tool's parameters.
+    pub parameters: serde_json::Value,
 }
 
 /// A boxed, heap-allocated stream of `LlmEvent`s that is `Send` and `'static`,
@@ -55,6 +158,21 @@ pub type ModelListFuture = Pin<Box<dyn Future<Output = Vec<String>> + Send + 'st
 /// and makes implementors independently testable by collecting the stream.
 pub trait LlmProvider: Send + Sync {
     fn stream_chat(&self, messages: Vec<Message>) -> LlmStream;
+
+    /// Stream a chat request with tool schemas available to the model.
+    ///
+    /// The returned stream may yield `LlmEvent::ToolCall` events when the
+    /// model decides to call a tool, or `LlmEvent::Token` events for normal
+    /// text responses — or a mix of both.
+    ///
+    /// The default implementation ignores `tools` and delegates to `stream_chat`.
+    fn stream_chat_with_tools(
+        &self,
+        messages: Vec<Message>,
+        _tools: Vec<ToolDefinition>,
+    ) -> LlmStream {
+        self.stream_chat(messages)
+    }
 
     /// Return the list of model names available from this provider.
     /// The default implementation returns an empty list; providers that

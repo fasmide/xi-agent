@@ -26,7 +26,22 @@ const COMPLETION_CMD_FG: Color = Color::Rgb(120, 200, 255);
 /// Foreground colour for the description column in the popup.
 const COMPLETION_DESC_FG: Color = Color::Rgb(140, 140, 160);
 
-/// Apply visual styles to the textarea at render time.
+/// Background colour of the selection menu header.
+const SELECTION_HEADER_BG: Color = Color::Rgb(20, 45, 20);
+
+/// Background colour of the selection menu items (unselected).
+const SELECTION_BG: Color = Color::Rgb(18, 35, 18);
+
+/// Background colour of the selected item in the selection menu.
+const SELECTION_SEL_BG: Color = Color::Rgb(30, 90, 30);
+
+/// Foreground colour for model names in the selection menu.
+const SELECTION_ITEM_FG: Color = Color::Rgb(140, 220, 140);
+
+/// Maximum number of rows shown in the selection menu before it is capped.
+const MAX_SELECTION_VISIBLE: usize = 12;
+
+
 /// The textarea itself is owned by `App` with no styling baked in;
 /// all rendering concerns live here.
 fn style_textarea(app: &mut App) {
@@ -67,26 +82,44 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let max_input_height = (terminal_height * 40 / 100).max(1);
     let input_height = input_line_count.min(max_input_height) as u16;
 
-    // Completion popup: one row per matching completion (0 when no completions).
-    let completion_height = app.completions.len() as u16;
+    // Completion popup: one row per matching completion (0 when selection mode
+    // is active, because the two menus are mutually exclusive).
+    let completion_height = if app.selection_mode {
+        0
+    } else {
+        app.completions.len() as u16
+    };
 
-    // Layout: chat log | completion popup | top halfblock | input | bottom halfblock
+    // Selection menu: header + capped item list (0 when not in selection mode).
+    let selection_header_height: u16 = if app.selection_mode { 1 } else { 0 };
+    let selection_items_height: u16 = if app.selection_mode {
+        app.selection_items.len().min(MAX_SELECTION_VISIBLE) as u16
+    } else {
+        0
+    };
+
+    // Layout: chat log | completion popup | selection header | selection items
+    //       | top halfblock | input | bottom halfblock
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),                    // 0: chat log
-            Constraint::Length(completion_height), // 1: completion popup
-            Constraint::Length(1),                 // 2: ▄ top edge of input panel
-            Constraint::Length(input_height),      // 3: input textarea
-            Constraint::Length(1),                 // 4: ▀ bottom edge of input panel
+            Constraint::Min(1),                        // 0: chat log
+            Constraint::Length(completion_height),     // 1: completion popup
+            Constraint::Length(selection_header_height), // 2: selection header
+            Constraint::Length(selection_items_height),  // 3: selection items
+            Constraint::Length(1),                     // 4: ▄ top edge of input panel
+            Constraint::Length(input_height),          // 5: input textarea
+            Constraint::Length(1),                     // 6: ▀ bottom edge of input panel
         ])
         .split(f.area());
 
-    let log_area        = chunks[0];
-    let completion_area = chunks[1];
-    let top_hb_area     = chunks[2];
-    let input_area      = chunks[3];
-    let bot_hb_area     = chunks[4];
+    let log_area           = chunks[0];
+    let completion_area    = chunks[1];
+    let sel_header_area    = chunks[2];
+    let sel_items_area     = chunks[3];
+    let top_hb_area        = chunks[4];
+    let input_area         = chunks[5];
+    let bot_hb_area        = chunks[6];
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
@@ -142,6 +175,43 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             width,
         );
         f.render_widget(Paragraph::new(popup_lines), completion_area);
+    }
+
+    // ── Selection menu ────────────────────────────────────────────────────────
+    if app.selection_mode {
+        // Header row: title on the left, key hints on the right.
+        const HINTS: &str = "↑↓ navigate   Enter select   Esc cancel  ";
+        const TITLE: &str = "  Select model  ";
+        let gap = width
+            .saturating_sub(TITLE.width() + HINTS.width());
+        let header_line = Line::from(vec![
+            Span::styled(
+                TITLE,
+                Style::default()
+                    .fg(Color::White)
+                    .bg(SELECTION_HEADER_BG)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::styled(
+                " ".repeat(gap),
+                Style::default().bg(SELECTION_HEADER_BG),
+            ),
+            Span::styled(
+                HINTS,
+                Style::default().fg(Color::DarkGray).bg(SELECTION_HEADER_BG),
+            ),
+        ]);
+        f.render_widget(Paragraph::new(vec![header_line]), sel_header_area);
+
+        // Item rows.
+        if selection_items_height > 0 {
+            let item_lines = build_selection_lines(
+                &app.selection_items,
+                app.selection_selected,
+                width,
+            );
+            f.render_widget(Paragraph::new(item_lines), sel_items_area);
+        }
     }
 
     // ── Halfblock edges ───────────────────────────────────────────────────────
@@ -228,7 +298,59 @@ fn build_completion_lines(
         .collect()
 }
 
-// ── Line building + pre-wrapping ─────────────────────────────────────────────
+// ── Selection menu rendering ──────────────────────────────────────────────────
+
+/// Build one `Line` per item for the model selection menu.
+fn build_selection_lines(
+    items: &[CompletionItem],
+    selected: usize,
+    terminal_width: usize,
+) -> Vec<Line<'static>> {
+    const INDENT: &str = "  ";
+
+    items
+        .iter()
+        .take(MAX_SELECTION_VISIBLE)
+        .enumerate()
+        .map(|(i, item)| {
+            let is_sel = i == selected;
+            let bg = if is_sel { SELECTION_SEL_BG } else { SELECTION_BG };
+
+            if item.loading {
+                let fill = " ".repeat(
+                    terminal_width.saturating_sub(INDENT.len() + item.label.width()),
+                );
+                return Line::from(vec![
+                    Span::styled(INDENT, Style::default().bg(bg)),
+                    Span::styled(
+                        item.label.clone(),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .bg(bg)
+                            .add_modifier(ratatui::style::Modifier::ITALIC),
+                    ),
+                    Span::styled(fill, Style::default().bg(bg)),
+                ]);
+            }
+
+            // Cursor indicator for selected row.
+            let prefix = if is_sel { "▶ " } else { "  " };
+            let used = INDENT.len() + prefix.width() + item.label.width();
+            let fill = " ".repeat(terminal_width.saturating_sub(used));
+            Line::from(vec![
+                Span::styled(INDENT, Style::default().bg(bg)),
+                Span::styled(
+                    prefix,
+                    Style::default().fg(Color::White).bg(bg),
+                ),
+                Span::styled(item.label.clone(), Style::default().fg(SELECTION_ITEM_FG).bg(bg)),
+                Span::styled(fill, Style::default().bg(bg)),
+            ])
+        })
+        .collect()
+}
+
+
 
 /// Build all visual lines for the chat log, pre-wrapped to `width` columns.
 /// Each returned `Line` occupies exactly one terminal row.
@@ -249,8 +371,7 @@ fn build_log_lines(
             Role::System => {
                 // System messages are not displayed in the chat log.
             }
-            Role::Assistant => {
-                let thinking = msg.thinking.as_deref().unwrap_or("");
+            Role::Assistant => {                let thinking = msg.thinking.as_deref().unwrap_or("");
                 let is_streaming_last = streaming && is_last;
 
                 // Render thinking block (if any thinking content has arrived).
@@ -271,10 +392,46 @@ fn build_log_lines(
                 let suffix = if is_streaming_last && !msg.content.is_empty() { "▋" } else { "" };
                 append_message(&mut lines, &content, suffix, width, false);
             }
+            Role::ToolCall => {
+                let name = msg.tool_name.as_deref().unwrap_or("unknown");
+                let args_preview = msg
+                    .tool_args
+                    .as_ref()
+                    .map(|a| {
+                        let s = a.to_string();
+                        if s.len() > 60 { format!("{}…", &s[..60]) } else { s }
+                    })
+                    .unwrap_or_default();
+                let label = format!("⚙ {name}({args_preview})");
+                append_message_colored(&mut lines, &label, width, Color::Cyan);
+            }
+            Role::ToolResult => {
+                let preview: String = msg.content.chars().take(200).collect();
+                let truncated = msg.content.len() > 200;
+                let display = if truncated { format!("{preview}…") } else { preview };
+                let color = if msg.is_error { Color::Red } else { Color::Green };
+                let label = format!("↳ {display}");
+                append_message_colored(&mut lines, &label, width, color);
+            }
         }
     }
 
     lines
+}
+
+/// Append pre-wrapped colored lines for a single-line tool label.
+/// Wraps if the label is wider than `width`, renders in the given `color`.
+fn append_message_colored(
+    out: &mut Vec<Line<'static>>,
+    content: &str,
+    width: usize,
+    color: Color,
+) {
+    let style = Style::default().fg(color);
+    let chunks = wrap_str(content, width);
+    for chunk in chunks {
+        out.push(Line::from(vec![Span::styled(chunk, style)]));
+    }
 }
 
 /// Append pre-wrapped dim (thinking) lines for one block.

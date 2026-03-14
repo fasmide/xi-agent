@@ -59,7 +59,7 @@ impl CompletionItem {
         }
     }
 
-    fn from_model(name: &str) -> Self {
+    pub(crate) fn from_model(name: &str) -> Self {
         Self {
             label: name.to_string(),
             detail: String::new(),
@@ -68,7 +68,7 @@ impl CompletionItem {
         }
     }
 
-    fn loading_indicator() -> Self {
+    pub(crate) fn loading_indicator() -> Self {
         Self {
             label: "fetching models…".to_string(),
             detail: String::new(),

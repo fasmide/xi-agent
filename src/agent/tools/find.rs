@@ -12,7 +12,11 @@ pub struct FindTool;
 
 impl Tool for FindTool {
     fn name(&self) -> &str {
-        "find"
+        "find_files"
+    }
+
+    fn label(&self) -> &str {
+        "🔍"
     }
 
     fn description(&self) -> &str {

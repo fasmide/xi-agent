@@ -8,7 +8,11 @@ pub struct WriteTool;
 
 impl Tool for WriteTool {
     fn name(&self) -> &str {
-        "write"
+        "write_file"
+    }
+
+    fn label(&self) -> &str {
+        "✍️"
     }
 
     fn description(&self) -> &str {

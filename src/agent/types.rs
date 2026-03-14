@@ -27,6 +27,8 @@ impl ToolResult {
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
+    /// Emoji / short label used for display in the UI (defaults to `name()`).
+    fn label(&self) -> &str { self.name() }
     /// JSON Schema object describing the tool's input parameters.
     fn parameters_schema(&self) -> serde_json::Value;
     /// Execute the tool with the given arguments (JSON object).
@@ -51,9 +53,9 @@ pub enum AgentEvent {
     ThinkingToken(String),
     // ── Tool lifecycle ─────────────────────────────────────────────────────────
     /// The model requested a tool call; execution is about to begin.
-    ToolCallStart { name: String, args: serde_json::Value },
+    ToolCallStart { id: String, name: String, args: serde_json::Value },
     /// A tool call finished; contains the result.
-    ToolCallEnd { name: String, result: ToolResult },
+    ToolCallEnd { id: String, name: String, result: ToolResult },
     // ── Loop lifecycle ─────────────────────────────────────────────────────────
     /// One LLM turn (assistant response + any tool calls) is complete.
     TurnEnd,

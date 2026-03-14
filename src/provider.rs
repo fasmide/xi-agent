@@ -61,6 +61,31 @@ impl ProviderKind {
     }
 }
 
+/// Return the context-window size (in tokens) for a known model name.
+/// Returns `None` for unrecognised models.
+pub fn context_window_for_model(model: &str) -> Option<usize> {
+    // Normalise to lowercase for matching.
+    let m = model.to_ascii_lowercase();
+    // Check prefixes / substrings for common model families.
+    if m.starts_with("o3-mini") { return Some(200_000); }
+    if m.starts_with("o3")      { return Some(200_000); }
+    if m.starts_with("o1-mini") { return Some(128_000); }
+    if m.starts_with("o1")      { return Some(200_000); }
+    if m.starts_with("gpt-4o")  { return Some(128_000); }
+    if m.starts_with("gpt-4-turbo") { return Some(128_000); }
+    if m.starts_with("gpt-4")   { return Some(8_192); }
+    if m.starts_with("gpt-3.5-turbo") { return Some(16_385); }
+    if m.starts_with("gpt-5")   { return Some(200_000); }
+    if m.contains("claude-3-5") || m.contains("claude-3.5") { return Some(200_000); }
+    if m.contains("claude-3")   { return Some(200_000); }
+    if m.contains("claude-2")   { return Some(100_000); }
+    if m.contains("llama3")     { return Some(128_000); }
+    if m.contains("llama2")     { return Some(4_096); }
+    if m.contains("mistral")    { return Some(32_000); }
+    if m.contains("gemma")      { return Some(8_192); }
+    None
+}
+
 /// Build a boxed `LlmProvider` for `kind` with the given model name.
 ///
 /// Returns an error if the required credentials or configuration are missing.

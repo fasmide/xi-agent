@@ -37,17 +37,17 @@ pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str) -> String {
     let has = |name: &str| tool_names.contains(&name);
     let mut guidelines: Vec<&str> = Vec::new();
 
-    if has("read") && has("edit") {
-        guidelines.push("Use read to examine files before editing.");
+    if has("👀") && has("📝") {
+        guidelines.push("Use 👀 to examine files before editing.");
     }
-    if has("edit") {
-        guidelines.push("Use edit for precise changes — old_text must match exactly.");
+    if has("📝") {
+        guidelines.push("Use 📝 for precise changes — old_text must match exactly.");
     }
-    if has("write") {
-        guidelines.push("Use write only for new files or complete rewrites.");
+    if has("✍️") {
+        guidelines.push("Use ✍️ only for new files or complete rewrites.");
     }
-    if has("find") || has("bash") {
-        guidelines.push("Use find or bash to explore the filesystem rather than guessing paths.");
+    if has("🔍") || has("💻") {
+        guidelines.push("Use 🔍 or 💻 to explore the filesystem rather than guessing paths.");
     }
     guidelines.push("Be concise. Show file paths clearly when working with files.");
     guidelines.push("Always use your tools to answer questions about files and the system — do not write code that the user would have to run themselves.");

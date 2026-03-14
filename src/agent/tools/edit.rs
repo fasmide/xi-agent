@@ -8,7 +8,11 @@ pub struct EditTool;
 
 impl Tool for EditTool {
     fn name(&self) -> &str {
-        "edit"
+        "edit_file"
+    }
+
+    fn label(&self) -> &str {
+        "📝"
     }
 
     fn description(&self) -> &str {

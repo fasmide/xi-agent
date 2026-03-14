@@ -19,15 +19,21 @@ mod provider;
 mod ui;
 
 use app::{App, SelectionResult};
-use agent::{build_system_prompt, tools::register_builtin_tools, AgentLoopConfig};
+use agent::{build_system_prompt, tools::register_builtin_tools, AgentLoopConfig, AgentEvent};
 use commands::CommandAction;
-use llm::LlmProvider;
+use llm::{LlmProvider, Message};
 use provider::{build_provider, ProviderKind};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    // ── Non-interactive (--print / -p) mode ───────────────────────────────────
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(prompt) = parse_print_flag(&args) {
+        return run_print_mode(prompt).await;
+    }
+
     // Determine the initial provider from the PIRS_PROVIDER env var, falling
     // back to Copilot (the default credential source in auth.json).
     let mut current_kind = std::env::var("PIRS_PROVIDER")
@@ -151,6 +157,13 @@ async fn run(
                             && key.modifiers.contains(KeyModifiers::CONTROL)
                         {
                             return Ok(RunResult::Quit);
+                        }
+
+                        if key.code == KeyCode::Char('i')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            app.toggle_info();
+                            continue;
                         }
 
                         // ── Selection menu mode ───────────────────────────────
@@ -280,4 +293,99 @@ async fn run(
             }
         }
     }
+}
+
+// ── Non-interactive helpers ───────────────────────────────────────────────────
+
+/// Parse `--print <prompt>` or `-p <prompt>` from the argument list.
+/// Returns `Some(prompt)` when found, `None` otherwise.
+fn parse_print_flag(args: &[String]) -> Option<String> {
+    let mut iter = args.iter().skip(1).peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--print" || arg == "-p" {
+            // Remaining args joined as the prompt (allows multi-word prompts
+            // without requiring quoting at the shell level).
+            let rest: Vec<&str> = std::iter::once(iter.next()?.as_str())
+                .chain(iter.map(|s| s.as_str()))
+                .collect();
+            return Some(rest.join(" "));
+        }
+    }
+    None
+}
+
+/// Non-interactive mode: run the agent loop for `prompt`, stream output to
+/// stdout, and exit when the loop finishes.
+async fn run_print_mode(prompt: String) -> io::Result<()> {
+    let current_kind = std::env::var("PIRS_PROVIDER")
+        .ok()
+        .and_then(|s| ProviderKind::from_name(&s))
+        .unwrap_or(ProviderKind::Copilot);
+
+    let current_model = std::env::var("COPILOT_MODEL")
+        .or_else(|_| std::env::var("OPENAI_MODEL"))
+        .unwrap_or_else(|_| current_kind.default_model().to_string());
+
+    let provider = build_provider(&current_kind, &current_model).map_err(|e| {
+        io::Error::new(io::ErrorKind::Other, format!("provider error: {e}"))
+    })?;
+
+    let tools = register_builtin_tools();
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| ".".to_string());
+    let system_prompt = build_system_prompt(&tools, &cwd);
+
+    let messages: Vec<Message> = vec![
+        Message::system(&system_prompt),
+        Message::user(&prompt),
+    ];
+
+    let config = AgentLoopConfig {
+        tools,
+        before_tool_call: None,
+        after_tool_call: None,
+        max_turns: 20,
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+
+    tokio::spawn(async move {
+        agent::run_agent_loop(messages, config, provider, tx).await;
+    });
+
+    let mut exit_code = 0i32;
+
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            AgentEvent::TextToken(t) => {
+                print!("{t}");
+                use std::io::Write;
+                let _ = io::stdout().flush();
+            }
+            AgentEvent::ThinkingToken(_) => {
+                // Suppress thinking tokens in print mode.
+            }
+            AgentEvent::ToolCallStart { name, args, .. } => {
+                let args_str = serde_json::to_string(&args).unwrap_or_default();
+                eprintln!("\n[tool] {name}({args_str})");
+            }
+            AgentEvent::ToolCallEnd { name, result, .. } => {
+                let status = if result.is_error { "error" } else { "ok" };
+                eprintln!("[tool] {name} → {status}: {}", result.content.lines().next().unwrap_or(""));
+            }
+            AgentEvent::TurnEnd => {}
+            AgentEvent::Done => {
+                println!(); // final newline after streamed output
+                break;
+            }
+            AgentEvent::Error(e) => {
+                eprintln!("error: {e}");
+                exit_code = 1;
+                break;
+            }
+        }
+    }
+
+    std::process::exit(exit_code);
 }

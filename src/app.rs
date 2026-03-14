@@ -16,6 +16,9 @@ pub enum SelectionResult {
     Provider(String),
 }
 
+/// Maximum number of rows shown in the selection menu before scrolling.
+pub const MAX_SELECTION_VISIBLE: usize = 12;
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -57,6 +60,13 @@ pub struct App {
     pub selection_items: Vec<CompletionItem>,
     /// Index of the currently highlighted selection row.
     pub selection_selected: usize,
+    /// First visible item index in the selection menu (scroll offset).
+    pub selection_scroll: usize,
+
+    // ── Info bar ──────────────────────────────────────────────────────────────
+    /// When true, the info bar (provider / model / context window) is shown
+    /// below the input panel.  Toggled by Ctrl+I.
+    pub show_info: bool,
 
     // ── Async channels ────────────────────────────────────────────────────────
     /// Receives AgentEvents forwarded from the active agent loop task.
@@ -97,11 +107,18 @@ impl App {
             selection_title: "Select model",
             selection_items: Vec::new(),
             selection_selected: 0,
+            selection_scroll: 0,
+            show_info: false,
             event_rx,
             event_tx,
             models_rx,
             models_tx,
         }
+    }
+
+    /// Toggle the info bar visibility.
+    pub fn toggle_info(&mut self) {
+        self.show_info = !self.show_info;
     }
 
     fn make_textarea() -> TextArea<'static> {
@@ -222,6 +239,7 @@ impl App {
         self.selection_mode = true;
         self.selection_title = "  Select model  ";
         self.selection_selected = 0;
+        self.selection_scroll = 0;
         self.selection_items = if let Some(models) = &self.available_models {
             models.iter().map(|m| CompletionItem::from_model(m)).collect()
         } else {
@@ -235,6 +253,7 @@ impl App {
         self.selection_mode = true;
         self.selection_title = "  Select provider  ";
         self.selection_selected = 0;
+        self.selection_scroll = 0;
         self.selection_items = ProviderKind::all()
             .iter()
             .map(|p| CompletionItem::from_provider(p.name(), p.label()))
@@ -246,6 +265,7 @@ impl App {
         self.selection_mode = false;
         self.selection_items.clear();
         self.selection_selected = 0;
+        self.selection_scroll = 0;
     }
 
     /// Returns true when a model fetch should be triggered for the model
@@ -262,6 +282,14 @@ impl App {
         let len = self.selection_items.len();
         if len > 0 {
             self.selection_selected = (self.selection_selected + 1) % len;
+            // Scroll down if the newly selected item is below the visible window.
+            if self.selection_selected >= self.selection_scroll + MAX_SELECTION_VISIBLE {
+                self.selection_scroll = self.selection_selected + 1 - MAX_SELECTION_VISIBLE;
+            }
+            // Wrap-around: if we jumped back to 0 reset the scroll too.
+            if self.selection_selected == 0 {
+                self.selection_scroll = 0;
+            }
         }
     }
 
@@ -270,6 +298,14 @@ impl App {
         let len = self.selection_items.len();
         if len > 0 {
             self.selection_selected = (self.selection_selected + len - 1) % len;
+            // Scroll up if the newly selected item is above the visible window.
+            if self.selection_selected < self.selection_scroll {
+                self.selection_scroll = self.selection_selected;
+            }
+            // Wrap-around: if we jumped to the last item, scroll to show it.
+            if self.selection_selected == len - 1 {
+                self.selection_scroll = len.saturating_sub(MAX_SELECTION_VISIBLE);
+            }
         }
     }
 
@@ -379,11 +415,11 @@ impl App {
                     last.content.push_str(&token);
                 }
             }
-            AgentEvent::ToolCallStart { name, args } => {
-                self.messages.push(Message::tool_call("", name, args));
+            AgentEvent::ToolCallStart { id, name, args } => {
+                self.messages.push(Message::tool_call(id, name, args));
             }
-            AgentEvent::ToolCallEnd { name, result } => {
-                self.messages.push(Message::tool_result(&name, result.content, result.is_error));
+            AgentEvent::ToolCallEnd { id, name: _name, result } => {
+                self.messages.push(Message::tool_result(&id, result.content, result.is_error));
             }
             AgentEvent::TurnEnd => {}
             AgentEvent::Done => {

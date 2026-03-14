@@ -85,8 +85,13 @@ pub async fn run_agent_loop(
 
         // ── Execute tool calls sequentially ───────────────────────────────────
         for (id, name, args) in pending_tool_calls {
+            let display_name = config.tools.get(&name)
+                .map(|t| t.label().to_string())
+                .unwrap_or_else(|| name.clone());
+
             let _ = tx.send(AgentEvent::ToolCallStart {
-                name: name.clone(),
+                id: id.clone(),
+                name: display_name,
                 args: args.clone(),
             });
 
@@ -114,6 +119,7 @@ pub async fn run_agent_loop(
             }
 
             let _ = tx.send(AgentEvent::ToolCallEnd {
+                id: id.clone(),
                 name: name.clone(),
                 result: result.clone(),
             });

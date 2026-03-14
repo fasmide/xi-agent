@@ -6,7 +6,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::{app::App, commands::CompletionItem, llm::Role};
+use crate::{app::{App, MAX_SELECTION_VISIBLE}, commands::CompletionItem, llm::Role, provider::context_window_for_model};
 
 /// Background colour of the input panel.
 const INPUT_BG: Color = Color::Rgb(30, 30, 40);
@@ -37,9 +37,6 @@ const SELECTION_SEL_BG: Color = Color::Rgb(30, 90, 30);
 
 /// Foreground colour for model names in the selection menu.
 const SELECTION_ITEM_FG: Color = Color::Rgb(140, 220, 140);
-
-/// Maximum number of rows shown in the selection menu before it is capped.
-const MAX_SELECTION_VISIBLE: usize = 12;
 
 
 /// The textarea itself is owned by `App` with no styling baked in;
@@ -82,6 +79,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let max_input_height = (terminal_height * 40 / 100).max(1);
     let input_height = input_line_count.min(max_input_height) as u16;
 
+    // Info bar: 1 row when show_info is active, 0 otherwise.
+    let info_height: u16 = if app.show_info { 1 } else { 0 };
+
     // Completion popup: one row per matching completion (0 when selection mode
     // is active, because the two menus are mutually exclusive).
     let completion_height = if app.selection_mode {
@@ -99,7 +99,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     };
 
     // Layout: chat log | completion popup | selection header | selection items
-    //       | top halfblock | input | bottom halfblock
+    //       | top halfblock | input | bottom halfblock | info bar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -110,6 +110,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             Constraint::Length(1),                     // 4: ▄ top edge of input panel
             Constraint::Length(input_height),          // 5: input textarea
             Constraint::Length(1),                     // 6: ▀ bottom edge of input panel
+            Constraint::Length(info_height),           // 7: info bar (optional)
         ])
         .split(f.area());
 
@@ -120,6 +121,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let top_hb_area        = chunks[4];
     let input_area         = chunks[5];
     let bot_hb_area        = chunks[6];
+    let info_area          = chunks[7];
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
@@ -208,9 +210,23 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             let item_lines = build_selection_lines(
                 &app.selection_items,
                 app.selection_selected,
+                app.selection_scroll,
                 width,
             );
             f.render_widget(Paragraph::new(item_lines), sel_items_area);
+
+            // Scrollbar when the list is longer than the visible window.
+            let total = app.selection_items.len();
+            if total > MAX_SELECTION_VISIBLE {
+                let max_scroll = total - MAX_SELECTION_VISIBLE;
+                let mut sb_state =
+                    ScrollbarState::new(max_scroll + 1).position(app.selection_scroll);
+                f.render_stateful_widget(
+                    Scrollbar::new(ScrollbarOrientation::VerticalRight),
+                    sel_items_area,
+                    &mut sb_state,
+                );
+            }
         }
     }
 
@@ -226,6 +242,21 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     // ── Input box ─────────────────────────────────────────────────────────────
     f.render_widget(&app.textarea, input_area);
+
+    // ── Info bar ──────────────────────────────────────────────────────────────
+    if app.show_info {
+        let ctx_str = match context_window_for_model(&app.current_model) {
+            Some(n) => format_context_size(n),
+            None    => "unknown".to_string(),
+        };
+        let info_line = build_info_line(
+            &app.current_provider,
+            &app.current_model,
+            &ctx_str,
+            width,
+        );
+        f.render_widget(Paragraph::new(vec![info_line]), info_area);
+    }
 }
 
 // ── Completion popup rendering ────────────────────────────────────────────────
@@ -304,14 +335,16 @@ fn build_completion_lines(
 fn build_selection_lines(
     items: &[CompletionItem],
     selected: usize,
+    scroll: usize,
     terminal_width: usize,
 ) -> Vec<Line<'static>> {
     const INDENT: &str = "  ";
 
     items
         .iter()
-        .take(MAX_SELECTION_VISIBLE)
         .enumerate()
+        .skip(scroll)
+        .take(MAX_SELECTION_VISIBLE)
         .map(|(i, item)| {
             let is_sel = i == selected;
             let bg = if is_sel { SELECTION_SEL_BG } else { SELECTION_BG };
@@ -543,4 +576,68 @@ fn wrap_str(text: &str, width: usize) -> Vec<String> {
         .into_iter()
         .map(|cow| cow.into_owned())
         .collect()
+}
+
+// ── Info bar ──────────────────────────────────────────────────────────────────
+
+/// Background colour for the info bar.
+const INFO_BG: Color = Color::Rgb(20, 20, 30);
+
+/// Build the single info-bar `Line` showing provider / model / context window.
+fn build_info_line<'a>(
+    provider: &str,
+    model: &str,
+    ctx: &str,
+    width: usize,
+) -> Line<'a> {
+    let sep_style  = Style::default().fg(Color::Rgb(60, 60, 80)).bg(INFO_BG);
+    let key_style  = Style::default().fg(Color::Rgb(100, 100, 130)).bg(INFO_BG);
+    let val_style  = Style::default().fg(Color::Rgb(180, 200, 255)).bg(INFO_BG);
+    let fill_style = Style::default().bg(INFO_BG);
+    let hint_style = Style::default().fg(Color::Rgb(60, 60, 80)).bg(INFO_BG);
+
+    let hint = "Ctrl+I";
+    // Build all the content spans.
+    let content_spans: Vec<Span<'a>> = vec![
+        Span::styled(" ", fill_style),
+        Span::styled("provider", key_style),
+        Span::styled(" ", fill_style),
+        Span::styled(provider.to_string(), val_style),
+        Span::styled("  │  ", sep_style),
+        Span::styled("model", key_style),
+        Span::styled(" ", fill_style),
+        Span::styled(model.to_string(), val_style),
+        Span::styled("  │  ", sep_style),
+        Span::styled("context", key_style),
+        Span::styled(" ", fill_style),
+        Span::styled(format!("{ctx} tokens"), val_style),
+    ];
+
+    // Calculate used columns (approximate; ASCII only for labels).
+    let used: usize = 1 // leading space
+        + "provider".len() + 1 + provider.len()
+        + 5 // sep
+        + "model".len() + 1 + model.len()
+        + 5 // sep
+        + "context".len() + 1 + ctx.len() + " tokens".len();
+
+    let hint_len = hint.len() + 1; // hint + trailing space
+    let fill_len = width.saturating_sub(used + hint_len);
+
+    let mut spans = content_spans;
+    spans.push(Span::styled(" ".repeat(fill_len), fill_style));
+    spans.push(Span::styled(hint.to_string(), hint_style));
+    spans.push(Span::styled(" ", fill_style));
+
+    Line::from(spans)
+}
+
+/// Format a context window token count as a human-readable string,
+/// e.g. 128000 → "128k", 200000 → "200k", 8192 → "8k".
+fn format_context_size(n: usize) -> String {
+    if n >= 1_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        n.to_string()
+    }
 }

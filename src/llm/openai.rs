@@ -97,7 +97,7 @@ impl OpenAiProvider {
         let debug = std::env::var("PIRS_DEBUG").is_ok();
 
         Box::pin(async_stream::stream! {
-            let oai_messages: Vec<OaiMessage> = messages.iter().map(to_oai_message).collect();
+            let oai_messages: Vec<OaiMessage> = to_oai_messages(&messages);
 
             let body = ChatRequest {
                 model,
@@ -364,6 +364,94 @@ struct ModelEntry {
 }
 
 // ── Serialisation helpers ─────────────────────────────────────────────────────
+
+/// Convert a pirs `Message` history to OpenAI Chat Completions messages.
+///
+/// The OpenAI API requires that tool calls and their accompanying text live in
+/// *one* assistant message, followed by one `"role":"tool"` message per result.
+/// Pirs stores them as separate `Role::Assistant` + `Role::ToolCall` +
+/// `Role::ToolResult` messages, interleaved when there are multiple calls in a
+/// single turn.  This function:
+///
+/// 1. Merges a `Role::Assistant` message with any immediately following
+///    `Role::ToolCall` messages into a single assistant message that carries
+///    both `content` and `tool_calls`.
+/// 2. Collects the corresponding `Role::ToolResult` messages and emits them
+///    after the merged assistant message, preserving order.
+/// 3. Skips empty assistant messages that have no content and no tool calls
+///    (e.g. an aborted turn with no output).
+fn to_oai_messages(messages: &[Message]) -> Vec<OaiMessage> {
+    let mut result: Vec<OaiMessage> = Vec::new();
+    let mut i = 0;
+
+    while i < messages.len() {
+        let msg = &messages[i];
+
+        match msg.role {
+            Role::Assistant => {
+                // Look ahead and collect alternating ToolCall / ToolResult pairs
+                // that belong to this turn.
+                let mut j = i + 1;
+                let mut tool_calls: Vec<OaiToolCallItem> = Vec::new();
+                let mut tool_results: Vec<OaiMessage> = Vec::new();
+
+                while j < messages.len() && messages[j].role == Role::ToolCall {
+                    let tc = &messages[j];
+                    let call_idx = tool_calls.len();
+                    tool_calls.push(OaiToolCallItem {
+                        id: tc.tool_call_id.clone().unwrap_or_else(|| format!("call_{call_idx}")),
+                        r#type: "function",
+                        function: OaiToolCallFunction {
+                            name: tc.tool_name.clone().unwrap_or_default(),
+                            arguments: tc
+                                .tool_args
+                                .as_ref()
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "{}".to_string()),
+                        },
+                    });
+                    j += 1;
+
+                    // Each ToolCall is immediately followed by its ToolResult.
+                    if j < messages.len() && messages[j].role == Role::ToolResult {
+                        tool_results.push(to_oai_message(&messages[j]));
+                        j += 1;
+                    }
+                }
+
+                let content = if msg.content.is_empty() { None } else { Some(msg.content.clone()) };
+                let tool_calls_opt = if tool_calls.is_empty() { None } else { Some(tool_calls) };
+
+                // Skip completely empty assistant messages (no content, no tool calls).
+                if content.is_some() || tool_calls_opt.is_some() {
+                    result.push(OaiMessage {
+                        role: "assistant",
+                        content,
+                        tool_calls: tool_calls_opt,
+                        tool_call_id: None,
+                    });
+                    result.extend(tool_results);
+                }
+
+                i = j;
+            }
+
+            // Standalone ToolCall without a preceding Assistant — shouldn't happen
+            // in normal agent flow but handled gracefully.
+            Role::ToolCall => {
+                result.push(to_oai_message(msg));
+                i += 1;
+            }
+
+            _ => {
+                result.push(to_oai_message(msg));
+                i += 1;
+            }
+        }
+    }
+
+    result
+}
 
 fn to_oai_message(msg: &Message) -> OaiMessage {
     match msg.role {

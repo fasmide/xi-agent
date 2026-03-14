@@ -56,6 +56,10 @@ struct OllamaMessage {
     /// Populated for Role::ToolCall messages (assistant turn with tool calls).
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OllamaToolCallItem>>,
+    /// Populated for Role::ToolResult messages so the model can match results
+    /// back to the originating call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
 }
 
 /// A single tool call entry inside an assistant message.
@@ -127,8 +131,6 @@ fn coerce_arguments(v: serde_json::Value) -> serde_json::Value {
     }
     v
 }
-
-// Serde types for the Ollama /api/tags endpoint.
 #[derive(Deserialize)]
 struct TagsResponse {
     models: Vec<TagModel>,
@@ -154,18 +156,21 @@ fn to_ollama_message(msg: &Message) -> OllamaMessage {
                     arguments: msg.tool_args.clone().unwrap_or(serde_json::Value::Null),
                 },
             }]),
+            tool_call_id: None,
         },
         Role::ToolResult => OllamaMessage {
             role: "tool",
             content: msg.content.clone(),
             thinking: None,
             tool_calls: None,
+            tool_call_id: msg.tool_call_id.clone(),
         },
         _ => OllamaMessage {
             role: msg.role.as_str(),
             content: msg.content.clone(),
             thinking: msg.thinking.clone().filter(|t| !t.is_empty()),
             tool_calls: None,
+            tool_call_id: None,
         },
     }
 }
@@ -274,6 +279,7 @@ impl LlmProvider for OllamaProvider {
         let url = format!("{}/api/chat", self.base_url);
         let model = self.model.clone();
         let client = self.client.clone();
+        let debug = std::env::var("PIRS_DEBUG").is_ok();
 
         Box::pin(async_stream::stream! {
             let ollama_tools: Vec<OllamaToolDef> = tools
@@ -292,8 +298,17 @@ impl LlmProvider for OllamaProvider {
                 model,
                 messages: messages.iter().map(to_ollama_message).collect(),
                 tools: ollama_tools,
-                stream: true,
+                // stream: false so that tool_calls are guaranteed to arrive
+                // in a single, complete JSON object. Many Ollama models do not
+                // reliably emit tool_calls in the NDJSON stream.
+                stream: false,
             };
+
+            if debug {
+                if let Ok(json) = serde_json::to_string_pretty(&body) {
+                    eprintln!("[PIRS_DEBUG] → request:\n{json}");
+                }
+            }
 
             let response = match client
                 .post(&url)
@@ -304,7 +319,7 @@ impl LlmProvider for OllamaProvider {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    yield LlmEvent::Error(e.to_string());
+                    yield LlmEvent::Error(e);
                     return;
                 }
             };
@@ -316,21 +331,37 @@ impl LlmProvider for OllamaProvider {
                 return;
             }
 
-            let mut byte_stream = response.bytes_stream();
-            let mut buf = String::new();
-            while let Some(chunk) = byte_stream.next().await {
-                let bytes = match chunk {
-                    Ok(b) => b,
-                    Err(e) => { yield LlmEvent::Error(e.to_string()); return; }
-                };
-                buf.push_str(&String::from_utf8_lossy(&bytes));
-                while let Some(pos) = buf.find('\n') {
-                    let line = buf[..pos].trim().to_string();
-                    buf.drain(..=pos);
-                    let mut events = Vec::new();
-                    let done = parse_ndjson_line(&line, &mut events);
-                    for ev in events { yield ev; }
-                    if done { return; }
+            let text = match response.text().await {
+                Ok(t) => t,
+                Err(e) => { yield LlmEvent::Error(e.to_string()); return; }
+            };
+
+            if debug {
+                eprintln!("[PIRS_DEBUG] ← response:\n{text}");
+            }
+
+            let chunk: ChatChunk = match serde_json::from_str(&text) {
+                Ok(c) => c,
+                Err(e) => {
+                    yield LlmEvent::Error(format!("Parse error: {e}\nBody: {text}"));
+                    return;
+                }
+            };
+
+            if !chunk.message.tool_calls.is_empty() {
+                for (i, tc) in chunk.message.tool_calls.iter().enumerate() {
+                    yield LlmEvent::ToolCall {
+                        id: format!("call_{i}"),
+                        name: tc.function.name.clone(),
+                        args: coerce_arguments(tc.function.arguments.clone()),
+                    };
+                }
+            } else {
+                if !chunk.message.thinking.is_empty() {
+                    yield LlmEvent::ThinkingToken(chunk.message.thinking.clone());
+                }
+                if !chunk.message.content.is_empty() {
+                    yield LlmEvent::Token(chunk.message.content.clone());
                 }
             }
             yield LlmEvent::Done;

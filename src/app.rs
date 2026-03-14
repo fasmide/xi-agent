@@ -349,8 +349,8 @@ impl App {
             AgentEvent::ToolCallStart { name, args } => {
                 self.messages.push(Message::tool_call("", name, args));
             }
-            AgentEvent::ToolCallEnd { result, .. } => {
-                self.messages.push(Message::tool_result("", result.content, result.is_error));
+            AgentEvent::ToolCallEnd { name, result } => {
+                self.messages.push(Message::tool_result(&name, result.content, result.is_error));
             }
             AgentEvent::TurnEnd => {
                 // Reserved for future use (e.g. visual separator between turns).

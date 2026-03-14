@@ -38,7 +38,24 @@ Active provider and model shown in the Ctrl+I info bar. `/provider` and
 
 ## 🔴 High priority
 
-### 1. `ask_user` tool
+### 1. Provider authentication / login
+There is no way to authenticate from inside pirs. Missing credentials cause
+a silent fallback. Users must manually obtain and place tokens before first
+use.
+
+Add a `/login [provider]` slash command that runs the appropriate flow:
+- **Copilot**: GitHub OAuth device flow — show a one-time code and URL,
+  poll in the background, exchange for a Copilot session token, store in
+  `~/.pi/agent/auth.json`.
+- **OpenAI**: prompt for an API key (masked input), store in `auth.json`.
+- **Codex**: out of scope (browser-extracted session); document manual steps.
+
+Also: detect 401 responses during chat and trigger a re-login/token-refresh
+instead of failing silently.
+
+See [plan](plans/2026-03-14-provider-auth.md).
+
+### 2. `ask_user` tool
 Add a sixth built-in tool the model can call when it reaches a genuine
 decision point — choosing between approaches, resolving an ambiguous
 filename, obtaining a value it cannot infer. The model decides when to call

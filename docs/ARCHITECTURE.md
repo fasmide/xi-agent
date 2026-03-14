@@ -141,6 +141,9 @@ provider is active.
 
 ## What Is Not Here Yet
 
+- **Provider authentication** — no `/login` command; credentials must be
+  placed manually; missing credentials cause a silent fallback; 401 responses
+  are not retried. See [plan](plans/2026-03-14-provider-auth.md).
 - **`ask_user` tool** — no built-in tool for the model to ask the user a
   question mid-task; the agent cannot pause for user decisions. See
   [plan](plans/2026-03-14-ask-user-tool.md).

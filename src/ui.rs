@@ -8,6 +8,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{app::App, llm::Role};
 
+/// Background colour of the input panel.
+const INPUT_BG: Color = Color::Rgb(30, 30, 40);
+
 /// Apply visual styles to the textarea at render time.
 /// The textarea itself is owned by `App` with no styling baked in;
 /// all rendering concerns live here.
@@ -15,8 +18,22 @@ fn style_textarea(app: &mut App) {
     app.textarea
         .set_block(Block::default().borders(Borders::NONE));
     app.textarea
-        .set_style(Style::default().fg(Color::White));
-    app.textarea.set_cursor_line_style(Style::default());
+        .set_style(Style::default().fg(Color::White).bg(INPUT_BG));
+    // Highlight the active cursor line with a slightly brighter shade.
+    app.textarea
+        .set_cursor_line_style(Style::default().bg(Color::Rgb(50, 50, 65)));
+}
+
+/// Render a full-width row of halfblock characters in `INPUT_BG` so that the
+/// input panel appears to have a smooth edge against the default background.
+///
+/// - Top edge: `▄` (lower-half block) — upper half = chat bg, lower half = INPUT_BG
+/// - Bottom edge: `▀` (upper-half block) — upper half = INPUT_BG, lower half = terminal bg
+fn halfblock_line(width: usize, ch: char) -> Line<'static> {
+    Line::from(Span::styled(
+        ch.to_string().repeat(width),
+        Style::default().fg(INPUT_BG),
+    ))
 }
 
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
@@ -28,23 +45,25 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let max_input_height = (terminal_height * 40 / 100).max(1);
     let input_height = input_line_count.min(max_input_height) as u16;
 
-    // Layout: chat | divider | input
+    // Layout: chat log | top halfblock | input | bottom halfblock
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(input_height),
+            Constraint::Length(1),             // ▄  top edge of input panel
+            Constraint::Length(input_height),  // input textarea
+            Constraint::Length(1),             // ▀  bottom edge of input panel
         ])
         .split(f.area());
 
-    let log_area = chunks[0];
-    let divider_area = chunks[1];
-    let input_area = chunks[2];
+    let log_area    = chunks[0];
+    let top_hb_area = chunks[1];
+    let input_area  = chunks[2];
+    let bot_hb_area = chunks[3];
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
-    let pane_width = log_area.width as usize;
+    let pane_width   = log_area.width as usize;
 
     // Pre-wrapped lines: each Line is exactly one visual row.
     let mut lines = build_log_lines(&app.messages, app.streaming, pane_width);
@@ -61,41 +80,44 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     let total_lines = lines.len();
-    // max_scroll and scroll offset are now purely in visual (== logical) lines.
-    let max_scroll = total_lines.saturating_sub(inner_height);
+    let max_scroll  = total_lines.saturating_sub(inner_height);
 
     if app.auto_scroll {
         app.log_scroll = max_scroll;
     } else {
         app.log_scroll = app.log_scroll.min(max_scroll);
-        // Re-enable auto-scroll if the user has scrolled back to the bottom.
         if app.log_scroll >= max_scroll {
             app.auto_scroll = true;
         }
     }
 
-    let scroll_offset = app.log_scroll as u16;
-
-    // No Wrap needed: every Line already fits within pane_width.
     let log_paragraph = Paragraph::new(Text::from(lines))
         .block(Block::default().borders(Borders::NONE))
-        .scroll((scroll_offset, 0));
+        .scroll((app.log_scroll as u16, 0));
 
     f.render_widget(log_paragraph, log_area);
 
-    // Scrollbar
     if total_lines > inner_height {
         let mut scrollbar_state =
             ScrollbarState::new(max_scroll + 1).position(app.log_scroll);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-        f.render_stateful_widget(scrollbar, log_area, &mut scrollbar_state);
+        f.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            log_area,
+            &mut scrollbar_state,
+        );
     }
 
-    // ── Divider ───────────────────────────────────────────────────────────────
-    let divider = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(Color::DarkGray));
-    f.render_widget(divider, divider_area);
+    // ── Halfblock edges ───────────────────────────────────────────────────────
+    let width = f.area().width as usize;
+
+    f.render_widget(
+        Paragraph::new(halfblock_line(width, '▄')),
+        top_hb_area,
+    );
+    f.render_widget(
+        Paragraph::new(halfblock_line(width, '▀')),
+        bot_hb_area,
+    );
 
     // ── Input box ─────────────────────────────────────────────────────────────
     f.render_widget(&app.textarea, input_area);

@@ -183,3 +183,4 @@ pub trait LlmProvider: Send + Sync {
 }
 
 pub mod ollama;
+pub mod openai;

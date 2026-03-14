@@ -20,16 +20,21 @@ mod ui;
 use app::App;
 use agent::{build_system_prompt, tools::register_builtin_tools, AgentLoopConfig};
 use commands::CommandAction;
-use llm::{ollama::OllamaProvider, LlmProvider};
+use llm::{openai::OpenAiProvider, LlmProvider};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let base_url = std::env::var("OLLAMA_HOST")
-        .unwrap_or_else(|_| "http://localhost:11434".to_string());
-    let mut current_model = std::env::var("OLLAMA_MODEL")
-        .unwrap_or_else(|_| "llama3.1".to_string());
+    let base_provider = match OpenAiProvider::from_env() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("pirs: failed to initialise OpenAI provider: {e}");
+            std::process::exit(1);
+        }
+    };
+    let mut current_model = std::env::var("OPENAI_MODEL")
+        .unwrap_or_else(|_| "gpt-4o".to_string());
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -60,7 +65,7 @@ async fn main() -> io::Result<()> {
     // `/model <name>`, rebuilding the provider with the new model name while
     // preserving the rest of the App state.
     loop {
-        let provider = Arc::new(OllamaProvider::new(&base_url, &current_model));
+        let provider = Arc::new(base_provider.with_model(&current_model));
         match run(&mut terminal, &mut app, &provider).await {
             Ok(RunResult::Quit) | Err(_) => break,
             Ok(RunResult::ChangeModel(name)) => {

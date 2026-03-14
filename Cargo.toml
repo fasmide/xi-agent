@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
+clap = { version = "4", features = ["derive"] }
 async-stream = "0.3"
 crossterm = { version = "0.28", features = ["event-stream"] }
 futures-util = "0.3.32"

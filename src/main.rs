@@ -1,3 +1,4 @@
+use clap::Parser;
 use crossterm::{
     event::{
         DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers,
@@ -24,26 +25,58 @@ use commands::CommandAction;
 use llm::{LlmProvider, Message};
 use provider::{build_provider, ProviderKind};
 
+// ── CLI definition ────────────────────────────────────────────────────────────
+
+/// pirs — a terminal-based AI coding agent
+#[derive(Debug, Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// LLM provider to use (copilot, openai, codex, ollama).
+    /// Overrides the PIRS_PROVIDER environment variable.
+    #[arg(long, short = 'P', value_name = "PROVIDER")]
+    provider: Option<String>,
+
+    /// Model name to use (e.g. gpt-4o, llama3.1).
+    /// Overrides COPILOT_MODEL / OPENAI_MODEL environment variables.
+    #[arg(long, short = 'm', value_name = "MODEL")]
+    model: Option<String>,
+
+    /// Run in non-interactive mode: send PROMPT, stream the response to
+    /// stdout, and exit.  Accepts multiple words without shell quoting.
+    #[arg(long, short = 'p', value_name = "PROMPT", num_args = 1..)]
+    print: Option<Vec<String>>,
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    let cli = Cli::parse();
+
     // ── Non-interactive (--print / -p) mode ───────────────────────────────────
-    let args: Vec<String> = std::env::args().collect();
-    if let Some(prompt) = parse_print_flag(&args) {
-        return run_print_mode(prompt).await;
+    if let Some(words) = cli.print {
+        let prompt = words.join(" ");
+        return run_print_mode(prompt, cli.provider.as_deref(), cli.model.as_deref()).await;
     }
 
-    // Determine the initial provider from the PIRS_PROVIDER env var, falling
-    // back to Copilot (the default credential source in auth.json).
-    let mut current_kind = std::env::var("PIRS_PROVIDER")
-        .ok()
-        .and_then(|s| ProviderKind::from_name(&s))
+    // Determine the initial provider.
+    // Priority: --provider flag > PIRS_PROVIDER env var > Copilot default.
+    let mut current_kind = cli.provider
+        .as_deref()
+        .and_then(ProviderKind::from_name)
+        .or_else(|| {
+            std::env::var("PIRS_PROVIDER")
+                .ok()
+                .and_then(|s| ProviderKind::from_name(&s))
+        })
         .unwrap_or(ProviderKind::Copilot);
 
-    let mut current_model = std::env::var("COPILOT_MODEL")
-        .or_else(|_| std::env::var("OPENAI_MODEL"))
-        .unwrap_or_else(|_| current_kind.default_model().to_string());
+    // Priority: --model flag > COPILOT_MODEL / OPENAI_MODEL env vars > provider default.
+    let mut current_model = cli.model
+        .clone()
+        .or_else(|| std::env::var("COPILOT_MODEL").ok())
+        .or_else(|| std::env::var("OPENAI_MODEL").ok())
+        .unwrap_or_else(|| current_kind.default_model().to_string());
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -297,34 +330,27 @@ async fn run(
 
 // ── Non-interactive helpers ───────────────────────────────────────────────────
 
-/// Parse `--print <prompt>` or `-p <prompt>` from the argument list.
-/// Returns `Some(prompt)` when found, `None` otherwise.
-fn parse_print_flag(args: &[String]) -> Option<String> {
-    let mut iter = args.iter().skip(1).peekable();
-    while let Some(arg) = iter.next() {
-        if arg == "--print" || arg == "-p" {
-            // Remaining args joined as the prompt (allows multi-word prompts
-            // without requiring quoting at the shell level).
-            let rest: Vec<&str> = std::iter::once(iter.next()?.as_str())
-                .chain(iter.map(|s| s.as_str()))
-                .collect();
-            return Some(rest.join(" "));
-        }
-    }
-    None
-}
-
 /// Non-interactive mode: run the agent loop for `prompt`, stream output to
 /// stdout, and exit when the loop finishes.
-async fn run_print_mode(prompt: String) -> io::Result<()> {
-    let current_kind = std::env::var("PIRS_PROVIDER")
-        .ok()
-        .and_then(|s| ProviderKind::from_name(&s))
+async fn run_print_mode(
+    prompt: String,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+) -> io::Result<()> {
+    let current_kind = provider_override
+        .and_then(ProviderKind::from_name)
+        .or_else(|| {
+            std::env::var("PIRS_PROVIDER")
+                .ok()
+                .and_then(|s| ProviderKind::from_name(&s))
+        })
         .unwrap_or(ProviderKind::Copilot);
 
-    let current_model = std::env::var("COPILOT_MODEL")
-        .or_else(|_| std::env::var("OPENAI_MODEL"))
-        .unwrap_or_else(|_| current_kind.default_model().to_string());
+    let current_model = model_override
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("COPILOT_MODEL").ok())
+        .or_else(|| std::env::var("OPENAI_MODEL").ok())
+        .unwrap_or_else(|| current_kind.default_model().to_string());
 
     let provider = build_provider(&current_kind, &current_model).map_err(|e| {
         io::Error::new(io::ErrorKind::Other, format!("provider error: {e}"))
@@ -367,12 +393,13 @@ async fn run_print_mode(prompt: String) -> io::Result<()> {
                 // Suppress thinking tokens in print mode.
             }
             AgentEvent::ToolCallStart { name, args, .. } => {
-                let args_str = serde_json::to_string(&args).unwrap_or_default();
-                eprintln!("\n[tool] {name}({args_str})");
+                let detail = tool_call_summary(&args);
+                eprintln!("{name} {detail}");
             }
-            AgentEvent::ToolCallEnd { name, result, .. } => {
-                let status = if result.is_error { "error" } else { "ok" };
-                eprintln!("[tool] {name} → {status}: {}", result.content.lines().next().unwrap_or(""));
+            AgentEvent::ToolCallEnd { name: _, result, .. } => {
+                if result.is_error {
+                    eprintln!("  ✗ {}", result.content.lines().next().unwrap_or("error"));
+                }
             }
             AgentEvent::TurnEnd => {}
             AgentEvent::Done => {
@@ -388,4 +415,23 @@ async fn run_print_mode(prompt: String) -> io::Result<()> {
     }
 
     std::process::exit(exit_code);
+}
+
+/// Extract a human-readable one-word summary from a tool call's arguments.
+/// Priority: path > command > pattern > first string value found.
+fn tool_call_summary(args: &serde_json::Value) -> String {
+    for key in &["path", "command", "pattern"] {
+        if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
+            return v.to_string();
+        }
+    }
+    // Fallback: first string value in the object.
+    if let Some(obj) = args.as_object() {
+        for v in obj.values() {
+            if let Some(s) = v.as_str() {
+                return s.to_string();
+            }
+        }
+    }
+    String::new()
 }

@@ -1,12 +1,12 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use tui_textarea::TextArea;
 
-use crate::{App, llm::Role};
+use crate::{llm::Role, App};
 
 pub fn make_textarea<'a>() -> TextArea<'a> {
     let mut textarea = TextArea::default();
@@ -39,9 +39,15 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
-    let mut lines = build_log_lines(&app.messages, app.streaming);
+    let pane_width = log_area.width as usize;
 
-    // Pad with empty lines at the top so content is always anchored to the bottom.
+    // Pre-wrapped lines: each Line is exactly one visual row.
+    let mut lines = build_log_lines(&app.messages, app.streaming, pane_width);
+
+    // Store log height for use as page size in the event loop.
+    app.last_log_height = inner_height;
+
+    // Pad the top with empty lines so content is anchored to the bottom.
     if lines.len() < inner_height {
         let padding = inner_height - lines.len();
         let mut padded = vec![Line::default(); padding];
@@ -50,21 +56,24 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     let total_lines = lines.len();
+    // max_scroll and scroll offset are now purely in visual (== logical) lines.
     let max_scroll = total_lines.saturating_sub(inner_height);
-
-    // Store the log height so the event loop can use it as a page size.
-    app.last_log_height = inner_height;
 
     if app.auto_scroll {
         app.log_scroll = max_scroll;
     } else {
         app.log_scroll = app.log_scroll.min(max_scroll);
+        // Re-enable auto-scroll if the user has scrolled back to the bottom.
+        if app.log_scroll >= max_scroll {
+            app.auto_scroll = true;
+        }
     }
+
     let scroll_offset = app.log_scroll as u16;
 
+    // No Wrap needed: every Line already fits within pane_width.
     let log_paragraph = Paragraph::new(Text::from(lines))
         .block(Block::default().borders(Borders::NONE))
-        .wrap(Wrap { trim: false })
         .scroll((scroll_offset, 0));
 
     f.render_widget(log_paragraph, log_area);
@@ -87,32 +96,36 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(&app.textarea, input_area);
 }
 
-/// Convert the message history into ratatui `Line`s for rendering.
-fn build_log_lines<'a>(
-    messages: &'a [crate::llm::Message],
+// ── Line building + pre-wrapping ─────────────────────────────────────────────
+
+/// Build all visual lines for the chat log, pre-wrapped to `width` columns.
+/// Each returned `Line` occupies exactly one terminal row.
+fn build_log_lines(
+    messages: &[crate::llm::Message],
     streaming: bool,
-) -> Vec<Line<'a>> {
-    let mut lines: Vec<Line> = Vec::new();
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
 
     for (idx, msg) in messages.iter().enumerate() {
         let is_last = idx == messages.len() - 1;
 
         match msg.role {
             Role::User => {
-                render_message(&mut lines, "You", Color::Green, &msg.content);
+                append_message(&mut lines, &msg.content, "", width, true);
             }
             Role::Assistant => {
-                let display = if streaming && is_last && msg.content.is_empty() {
-                    "▋".to_string() // blinking cursor placeholder while waiting for first token
+                let content = if streaming && is_last && msg.content.is_empty() {
+                    "▋".to_string()
                 } else {
                     msg.content.clone()
                 };
                 let suffix = if streaming && is_last && !msg.content.is_empty() {
-                    "▋" // inline cursor while tokens arrive
+                    "▋"
                 } else {
                     ""
                 };
-                render_message_with_suffix(&mut lines, "AI", Color::Cyan, &display, suffix);
+                append_message(&mut lines, &content, suffix, width, false);
             }
         }
     }
@@ -120,46 +133,139 @@ fn build_log_lines<'a>(
     lines
 }
 
-fn render_message<'a>(lines: &mut Vec<Line<'a>>, label: &'static str, color: Color, content: &str) {
-    render_message_with_suffix(lines, label, color, content, "");
-}
-
-fn render_message_with_suffix<'a>(
-    lines: &mut Vec<Line<'a>>,
-    label: &'static str,
-    color: Color,
+/// Append pre-wrapped visual lines for one message to `out`.
+///
+/// `user` — when true each line is padded to `width` and given a grey
+/// background so it stands out from assistant replies.
+fn append_message(
+    out: &mut Vec<Line<'static>>,
     content: &str,
     suffix: &'static str,
+    width: usize,
+    user: bool,
 ) {
-    let indent = " ".repeat(label.len() + 2); // "You: " → 5 chars, "AI: " → 4 chars, etc.
-    let content_lines: Vec<&str> = if content.is_empty() {
+    let user_bg = Style::default().bg(Color::Rgb(50, 50, 50));
+
+    // Split on explicit newlines first, then wrap each segment to width.
+    let segments: Vec<&str> = if content.is_empty() {
         vec![""]
     } else {
         content.split('\n').collect()
     };
 
-    for (i, part) in content_lines.iter().enumerate() {
-        if i == 0 {
-            let mut spans = vec![
-                Span::styled(
-                    format!("{label}: "),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(part.to_string()),
-            ];
-            if suffix != "" && i == content_lines.len() - 1 {
-                spans.push(Span::styled(suffix, Style::default().fg(Color::Yellow)));
+    let last_seg = segments.len() - 1;
+
+    for (seg_idx, segment) in segments.iter().enumerate() {
+        let is_last_seg = seg_idx == last_seg;
+        let chunks = wrap_str(segment, width);
+        let last_chunk = chunks.len() - 1;
+
+        for (chunk_idx, chunk) in chunks.iter().enumerate() {
+            let is_last_chunk = chunk_idx == last_chunk;
+            let show_suffix = !suffix.is_empty() && is_last_seg && is_last_chunk;
+
+            if user {
+                // Pad to `width` so the background spans the full line.
+                let text_len = chunk.chars().count();
+                let padding = width.saturating_sub(text_len);
+                let padded = format!("{}{}", chunk, " ".repeat(padding));
+                out.push(Line::from(Span::styled(padded, user_bg)));
+            } else {
+                let mut spans: Vec<Span<'static>> = vec![Span::raw(chunk.clone())];
+                if show_suffix {
+                    spans.push(Span::styled(suffix, Style::default().fg(Color::Yellow)));
+                }
+                out.push(Line::from(spans));
             }
-            lines.push(Line::from(spans));
-        } else {
-            let mut spans = vec![
-                Span::raw(indent.clone()),
-                Span::raw(part.to_string()),
-            ];
-            if suffix != "" && i == content_lines.len() - 1 {
-                spans.push(Span::styled(suffix, Style::default().fg(Color::Yellow)));
-            }
-            lines.push(Line::from(spans));
         }
     }
+}
+
+/// Split `text` into lines of at most `width` characters, breaking at word
+/// boundaries.  Words longer than `width` are hard-broken as a last resort.
+/// Always returns at least one chunk (empty string when `text` is empty).
+fn wrap_str(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len: usize = 0;
+
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+
+        if current.is_empty() {
+            // Start of a new line — always place the word here, hard-breaking
+            // if the word itself is longer than the available width.
+            if word_len <= width {
+                current.push_str(word);
+                current_len = word_len;
+            } else {
+                // Hard-break the oversized word across multiple lines.
+                let mut remaining = word;
+                while !remaining.is_empty() {
+                    let take = remaining
+                        .char_indices()
+                        .nth(width)
+                        .map(|(i, _)| i)
+                        .unwrap_or(remaining.len());
+                    let (head, tail) = remaining.split_at(take);
+                    if tail.is_empty() {
+                        // Last fragment — continue accumulating normally.
+                        current.push_str(head);
+                        current_len = head.chars().count();
+                    } else {
+                        lines.push(head.to_string());
+                    }
+                    remaining = tail;
+                }
+            }
+        } else {
+            // There is already content on the current line.
+            let needed = 1 + word_len; // space + word
+            if current_len + needed <= width {
+                current.push(' ');
+                current.push_str(word);
+                current_len += needed;
+            } else {
+                // Word doesn't fit — flush the current line and start fresh.
+                lines.push(current.clone());
+                current.clear();
+                current_len = 0;
+
+                if word_len <= width {
+                    current.push_str(word);
+                    current_len = word_len;
+                } else {
+                    // Hard-break the oversized word.
+                    let mut remaining = word;
+                    while !remaining.is_empty() {
+                        let take = remaining
+                            .char_indices()
+                            .nth(width)
+                            .map(|(i, _)| i)
+                            .unwrap_or(remaining.len());
+                        let (head, tail) = remaining.split_at(take);
+                        if tail.is_empty() {
+                            current.push_str(head);
+                            current_len = head.chars().count();
+                        } else {
+                            lines.push(head.to_string());
+                        }
+                        remaining = tail;
+                    }
+                }
+            }
+        }
+    }
+
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
 }

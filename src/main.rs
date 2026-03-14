@@ -1,5 +1,9 @@
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
+        KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -79,10 +83,19 @@ impl<'a> App<'a> {
 
     /// Scroll up by one page. Disables auto-scroll.
     pub fn scroll_up(&mut self) {
+        self.scroll_up_lines(self.last_log_height.max(1));
+    }
+
+    /// Scroll up by `n` lines. Disables auto-scroll.
+    pub fn scroll_up_lines(&mut self, n: usize) {
         self.auto_scroll = false;
-        self.log_scroll = self
-            .log_scroll
-            .saturating_sub(self.last_log_height.max(1));
+        self.log_scroll = self.log_scroll.saturating_sub(n);
+    }
+
+    /// Scroll down by `n` lines. Re-enables auto-scroll when reaching bottom.
+    pub fn scroll_down_lines(&mut self, n: usize) {
+        self.log_scroll = self.log_scroll.saturating_add(n);
+        // auto_scroll is re-enabled by draw() once log_scroll reaches max_scroll
     }
 
     /// Scroll down by one page. Snaps to bottom and re-enables auto-scroll.
@@ -121,7 +134,12 @@ async fn main() -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -131,6 +149,7 @@ async fn main() -> io::Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        PopKeyboardEnhancementFlags,
         LeaveAlternateScreen,
         DisableMouseCapture
     )?;
@@ -149,33 +168,45 @@ async fn run(
         terminal.draw(|f| ui::draw(f, app))?;
 
         if event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
-                    return Ok(());
-                }
-                if key.code == KeyCode::Esc {
-                    return Ok(());
-                }
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        return Ok(());
+                    }
+                    if key.code == KeyCode::Esc {
+                        return Ok(());
+                    }
 
-                match key.code {
-                    KeyCode::PageUp => {
-                        app.scroll_up();
-                        continue;
+                    match key.code {
+                        KeyCode::PageUp => {
+                            app.scroll_up();
+                            continue;
+                        }
+                        KeyCode::PageDown => {
+                            app.scroll_down();
+                            continue;
+                        }
+                        KeyCode::Enter if key.modifiers.is_empty() => {
+                            app.submit(provider);
+                            continue;
+                        }
+                        KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => {
+                            app.textarea.insert_newline();
+                            continue;
+                        }
+                        _ => {}
                     }
-                    KeyCode::PageDown => {
-                        app.scroll_down();
-                        continue;
-                    }
-                    KeyCode::Enter if key.modifiers.is_empty() => {
-                        app.submit(provider);
-                        continue;
-                    }
+
+                    app.textarea.input(Event::Key(key));
+                }
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => app.scroll_up_lines(3),
+                    MouseEventKind::ScrollDown => app.scroll_down_lines(3),
                     _ => {}
-                }
-
-                app.textarea.input(Event::Key(key));
+                },
+                _ => {}
             }
         }
     }

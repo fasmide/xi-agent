@@ -86,3 +86,63 @@ impl Tool for EditTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::Tool;
+    use std::io::Write;
+
+    fn write_temp(content: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f
+    }
+
+    #[tokio::test]
+    async fn edit_replaces_exact_match() {
+        let f = write_temp("hello world\n");
+        let path = f.path().to_str().unwrap().to_string();
+        let tool = EditTool;
+        let args = serde_json::json!({
+            "path": path,
+            "old_text": "hello",
+            "new_text": "goodbye"
+        });
+        let result = tool.execute(args).await;
+        assert!(!result.is_error, "unexpected error: {}", result.content);
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(updated, "goodbye world\n");
+    }
+
+    #[tokio::test]
+    async fn edit_no_match_is_error() {
+        let f = write_temp("hello world\n");
+        let tool = EditTool;
+        let args = serde_json::json!({
+            "path": f.path().to_str().unwrap(),
+            "old_text": "not found",
+            "new_text": "anything"
+        });
+        let result = tool.execute(args).await;
+        assert!(result.is_error, "expected error for no match");
+    }
+
+    #[tokio::test]
+    async fn edit_multiple_matches_is_error() {
+        let f = write_temp("foo foo foo\n");
+        let tool = EditTool;
+        let args = serde_json::json!({
+            "path": f.path().to_str().unwrap(),
+            "old_text": "foo",
+            "new_text": "bar"
+        });
+        let result = tool.execute(args).await;
+        assert!(result.is_error, "expected error for multiple matches");
+        assert!(
+            result.content.contains("3 times"),
+            "expected count in error: {}",
+            result.content
+        );
+    }
+}

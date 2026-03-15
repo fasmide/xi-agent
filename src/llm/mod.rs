@@ -186,3 +186,101 @@ pub mod codex;
 pub mod copilot;
 pub mod ollama;
 pub mod openai;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Role::as_str ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn role_as_str_system() {
+        assert_eq!(Role::System.as_str(), "system");
+    }
+
+    #[test]
+    fn role_as_str_user() {
+        assert_eq!(Role::User.as_str(), "user");
+    }
+
+    #[test]
+    fn role_as_str_assistant() {
+        assert_eq!(Role::Assistant.as_str(), "assistant");
+    }
+
+    #[test]
+    fn role_as_str_tool_call_is_assistant() {
+        // ToolCall messages are sent to the API as role "assistant" with a
+        // tool_calls array — the Role variant is only for internal bookkeeping.
+        assert_eq!(Role::ToolCall.as_str(), "assistant");
+    }
+
+    #[test]
+    fn role_as_str_tool_result_is_tool() {
+        assert_eq!(Role::ToolResult.as_str(), "tool");
+    }
+
+    // ── Message constructors ─────────────────────────────────────────────────
+
+    #[test]
+    fn message_user_fields() {
+        let m = Message::user("hello");
+        assert_eq!(m.role, Role::User);
+        assert_eq!(m.content, "hello");
+        assert!(m.thinking.is_none());
+        assert!(m.tool_call_id.is_none());
+    }
+
+    #[test]
+    fn message_assistant_fields() {
+        let m = Message::assistant("reply");
+        assert_eq!(m.role, Role::Assistant);
+        assert_eq!(m.content, "reply");
+    }
+
+    #[test]
+    fn message_system_fields() {
+        let m = Message::system("you are helpful");
+        assert_eq!(m.role, Role::System);
+        assert_eq!(m.content, "you are helpful");
+    }
+
+    #[test]
+    fn message_tool_call_fields() {
+        let args = serde_json::json!({"command": "ls"});
+        let m = Message::tool_call("id-1", "bash", args.clone());
+        assert_eq!(m.role, Role::ToolCall);
+        assert_eq!(m.tool_call_id.as_deref(), Some("id-1"));
+        assert_eq!(m.tool_name.as_deref(), Some("bash"));
+        assert_eq!(m.tool_args.as_ref().unwrap(), &args);
+        assert!(m.content.is_empty());
+    }
+
+    #[test]
+    fn message_tool_result_fields() {
+        let m = Message::tool_result("id-1", "output text", false);
+        assert_eq!(m.role, Role::ToolResult);
+        assert_eq!(m.tool_call_id.as_deref(), Some("id-1"));
+        assert_eq!(m.content, "output text");
+        assert!(!m.is_error);
+    }
+
+    #[test]
+    fn message_tool_result_is_error_flag() {
+        let m = Message::tool_result("id-2", "something went wrong", true);
+        assert!(m.is_error);
+    }
+
+    // ── Serde round-trip ─────────────────────────────────────────────────────
+
+    #[test]
+    fn message_round_trips_through_json() {
+        let original = Message::tool_call("call-42", "read_file", serde_json::json!({"path": "/etc/hosts"}));
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.role, original.role);
+        assert_eq!(decoded.tool_call_id, original.tool_call_id);
+        assert_eq!(decoded.tool_name, original.tool_name);
+        assert_eq!(decoded.tool_args, original.tool_args);
+    }
+}

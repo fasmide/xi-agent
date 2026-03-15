@@ -9,6 +9,9 @@ pub mod system_prompt;
 pub mod tools;
 pub mod types;
 
+#[cfg(test)]
+mod tests;
+
 pub use system_prompt::build_system_prompt;
 pub use types::{AgentEvent, AgentLoopConfig, ToolResult};
 

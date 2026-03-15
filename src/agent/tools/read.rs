@@ -87,3 +87,71 @@ impl Tool for ReadFileTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::Tool;
+    use std::io::Write;
+
+    fn write_temp(content: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        f
+    }
+
+    #[tokio::test]
+    async fn read_full_file() {
+        let f = write_temp("line1\nline2\nline3\n");
+        let tool = ReadFileTool;
+        let args = serde_json::json!({"path": f.path().to_str().unwrap()});
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("line1"));
+        assert!(result.content.contains("line3"));
+    }
+
+    #[tokio::test]
+    async fn read_with_offset_and_limit() {
+        let f = write_temp("a\nb\nc\nd\ne\n");
+        let tool = ReadFileTool;
+        let args = serde_json::json!({
+            "path": f.path().to_str().unwrap(),
+            "offset": 2,
+            "limit": 2
+        });
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        // Should contain lines 2-3 (b, c) but not a or e
+        assert!(result.content.contains('b'), "missing b: {}", result.content);
+        assert!(result.content.contains('c'), "missing c: {}", result.content);
+        assert!(!result.content.contains("\na\n") && !result.content.starts_with("a"), "should not contain line a: {}", result.content);
+        assert!(!result.content.contains("\ne\n") && !result.content.ends_with("\ne"), "should not contain line e: {}", result.content);
+    }
+
+    #[tokio::test]
+    async fn read_offset_beyond_eof_returns_empty() {
+        let f = write_temp("only one line\n");
+        let tool = ReadFileTool;
+        let args = serde_json::json!({
+            "path": f.path().to_str().unwrap(),
+            "offset": 100
+        });
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        // No lines selected; content should be empty or just the header
+        assert!(
+            result.content.trim().is_empty() || result.content.contains("lines"),
+            "unexpected content: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn read_missing_file_is_error() {
+        let tool = ReadFileTool;
+        let args = serde_json::json!({"path": "/nonexistent/path/to/file.txt"});
+        let result = tool.execute(args).await;
+        assert!(result.is_error, "expected error for missing file");
+    }
+}

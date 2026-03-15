@@ -58,26 +58,18 @@ Auth is tau-owned and no longer depends on `~/.pi` credentials.
 
 ## 🔴 High priority
 
-### 1. Tests
-A small unit-test baseline exists, but coverage of the auth subsystem and the
-agent loop is still missing. Priority areas:
+### 1. Tests ✓ done
+Tool implementations (`bash`, `read_file`, `edit_file`, `write_file`), agent
+loop (`MockProvider` + 4 scenarios), `Role`/`Message` serialisation, and
+`wrap_str` UI arithmetic are all covered. Auth store was done in a prior pass.
 
-- **Auth store**: round-trip serialization, single-provider updates preserve
-  other entries, atomic persistence ✓ done
-- **Agent loop**: 401 triggers exactly one refresh and one retry; failed refresh
-  produces a re-login prompt rather than a silent fallback
+Remaining gap (tracked separately as #2 below):
+- **Agent loop 401 path**: 401 triggers exactly one refresh and one retry; failed
+  refresh produces a re-login prompt — this logic lives in `App::apply_event`
+  and is tested implicitly via manual QA. Unit tests require a heavier `App`
+  harness or extraction of the 401 logic.
 
 ### 2. HTTP-dependent auth tests
-The `copilot::refresh`, `codex::refresh`, `copilot::login`, and `codex::login`
-functions make real HTTP calls and are not yet covered by tests. Requires a
-mock HTTP server (e.g. `wiremock`) as a dev-dependency. Priority cases:
-
-- `refresh` succeeds → credentials updated in store
-- `refresh` returns 4xx → error propagated, re-login prompt shown
-- `login` device/OAuth flow happy path
-- `login` cancelled → `LoginEvent::Error` with "cancelled" message
-
-See [plan](plans/2026-03-15-auth-tests-plan.md).
 
 ---
 

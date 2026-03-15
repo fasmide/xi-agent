@@ -97,3 +97,59 @@ fn truncate_bytes(bytes: &[u8], max_bytes: usize) -> String {
         s
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::Tool;
+
+    #[tokio::test]
+    async fn bash_captures_stdout() {
+        let tool = BashTool;
+        let args = serde_json::json!({"command": "echo hello"});
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("hello"), "stdout not captured: {}", result.content);
+    }
+
+    #[tokio::test]
+    async fn bash_captures_stderr() {
+        let tool = BashTool;
+        let args = serde_json::json!({"command": "echo oops >&2"});
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("oops"), "stderr not captured: {}", result.content);
+    }
+
+    #[tokio::test]
+    async fn bash_nonzero_exit_not_error() {
+        let tool = BashTool;
+        let args = serde_json::json!({"command": "exit 42"});
+        let result = tool.execute(args).await;
+        // is_error stays false; the exit code is embedded in the content
+        assert!(!result.is_error);
+        assert!(result.content.contains("exit 42"), "exit code not in output: {}", result.content);
+    }
+
+    #[tokio::test]
+    async fn bash_truncates_large_output() {
+        let tool = BashTool;
+        // Generate >8 KiB of output.
+        let args = serde_json::json!({"command": "head -c 16384 /dev/urandom | base64"});
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        assert!(
+            result.content.contains("[truncated]"),
+            "expected truncation marker: {}",
+            &result.content[..100.min(result.content.len())]
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_missing_command_param_is_error() {
+        let tool = BashTool;
+        let args = serde_json::json!({});
+        let result = tool.execute(args).await;
+        assert!(result.is_error);
+    }
+}

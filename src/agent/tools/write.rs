@@ -64,3 +64,54 @@ impl Tool for WriteTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::Tool;
+
+    #[tokio::test]
+    async fn write_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new_file.txt");
+        let tool = WriteTool;
+        let args = serde_json::json!({
+            "path": path.to_str().unwrap(),
+            "content": "hello\n"
+        });
+        let result = tool.execute(args).await;
+        assert!(!result.is_error, "unexpected error: {}", result.content);
+        assert!(path.exists(), "file was not created");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello\n");
+    }
+
+    #[tokio::test]
+    async fn write_overwrites_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.txt");
+        std::fs::write(&path, "old content\n").unwrap();
+        let tool = WriteTool;
+        let args = serde_json::json!({
+            "path": path.to_str().unwrap(),
+            "content": "new content\n"
+        });
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content\n");
+    }
+
+    #[tokio::test]
+    async fn write_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a").join("b").join("c").join("file.txt");
+        let tool = WriteTool;
+        let args = serde_json::json!({
+            "path": path.to_str().unwrap(),
+            "content": "deep\n"
+        });
+        let result = tool.execute(args).await;
+        assert!(!result.is_error, "unexpected error: {}", result.content);
+        assert!(path.exists(), "file not created in nested dirs");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "deep\n");
+    }
+}

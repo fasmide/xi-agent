@@ -705,3 +705,35 @@ fn format_context_size(n: usize) -> String {
         n.to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_str_splits_at_width() {
+        // "hello world" at width 5 should produce at least two chunks.
+        let chunks = wrap_str("hello world", 5);
+        assert!(chunks.len() >= 2, "expected at least 2 chunks, got: {:?}", chunks);
+    }
+
+    #[test]
+    fn wrap_str_handles_empty_input() {
+        let chunks = wrap_str("", 80);
+        assert_eq!(chunks, vec![String::new()]);
+    }
+
+    #[test]
+    fn wrap_str_handles_width_zero() {
+        // width=0 is the degenerate case; the whole string is returned as-is.
+        let chunks = wrap_str("some text", 0);
+        assert_eq!(chunks, vec!["some text".to_string()]);
+    }
+
+    #[test]
+    fn wrap_str_short_text_fits_in_one_chunk() {
+        let chunks = wrap_str("hi", 80);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "hi");
+    }
+}

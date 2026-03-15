@@ -1,5 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
+use tokio::sync::{mpsc::UnboundedSender, oneshot};
+
 // ── Tool result ───────────────────────────────────────────────────────────────
 
 /// The output produced by a tool execution.
@@ -44,6 +46,36 @@ pub trait Tool: Send + Sync {
 
 /// A registry mapping tool names to their implementations.
 pub type ToolRegistry = HashMap<String, Arc<dyn Tool>>;
+
+// ── ask_user request/response bridge ─────────────────────────────────────────
+
+/// One selectable option for the `ask_user` tool.
+#[derive(Debug, Clone)]
+pub struct AskUserOption {
+    pub title: String,
+    pub description: Option<String>,
+}
+
+/// Payload sent from `AskUserTool` to the TUI loop.
+#[derive(Debug)]
+pub struct AskRequest {
+    pub question: String,
+    pub context: Option<String>,
+    pub options: Vec<AskUserOption>,
+    pub allow_multiple: bool,
+    pub allow_freeform: bool,
+    pub reply: oneshot::Sender<AskUserResponse>,
+}
+
+/// User response returned from the TUI loop back to `AskUserTool`.
+#[derive(Debug)]
+pub enum AskUserResponse {
+    Answer(String),
+    Cancelled,
+}
+
+/// Sender type used by `AskUserTool` to post requests to the UI.
+pub type AskRequestTx = UnboundedSender<AskRequest>;
 
 // ── Agent events ──────────────────────────────────────────────────────────────
 

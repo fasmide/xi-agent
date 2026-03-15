@@ -1,0 +1,179 @@
+use std::pin::Pin;
+
+use serde_json::Value;
+use tokio::sync::oneshot;
+
+use crate::agent::types::{
+    AskRequest, AskRequestTx, AskUserOption, AskUserResponse, Tool, ToolResult,
+};
+
+pub struct AskUserTool {
+    tx: Option<AskRequestTx>,
+}
+
+impl AskUserTool {
+    pub fn new(tx: Option<AskRequestTx>) -> Self {
+        Self { tx }
+    }
+}
+
+impl Tool for AskUserTool {
+    fn name(&self) -> &str {
+        "ask_user"
+    }
+
+    fn description(&self) -> &str {
+        "Ask the user a question with optional multiple-choice answers. Use this only when you need user input to proceed."
+    }
+
+    fn parameters_schema(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the user"
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Relevant context summary shown before the question (optional)"
+                },
+                "options": {
+                    "type": "array",
+                    "description": "Optional choice list. Each option can be a string or object with title/description.",
+                    "items": {
+                        "anyOf": [
+                            { "type": "string" },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "title": { "type": "string" },
+                                    "description": { "type": "string" }
+                                },
+                                "required": ["title"]
+                            }
+                        ]
+                    }
+                },
+                "allowMultiple": {
+                    "type": "boolean",
+                    "description": "Whether multiple options may be selected (currently ignored in pirs UI)"
+                },
+                "allowFreeform": {
+                    "type": "boolean",
+                    "description": "Whether to allow freeform input in addition to options"
+                }
+            },
+            "required": ["question"]
+        })
+    }
+
+    fn execute(
+        &self,
+        args: Value,
+    ) -> Pin<Box<dyn std::future::Future<Output = ToolResult> + Send + '_>> {
+        Box::pin(async move {
+            let Some(tx) = &self.tx else {
+                return ToolResult::err("ask_user is unavailable in non-interactive mode");
+            };
+
+            let question = match args.get("question").and_then(Value::as_str) {
+                Some(q) if !q.trim().is_empty() => q.trim().to_string(),
+                _ => return ToolResult::err("Missing required parameter: question"),
+            };
+
+            let context = args
+                .get("context")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned);
+
+            let options = parse_options(args.get("options"));
+            let allow_multiple = args
+                .get("allowMultiple")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let allow_freeform = args
+                .get("allowFreeform")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+
+            let (reply_tx, reply_rx) = oneshot::channel();
+
+            let request = AskRequest {
+                question,
+                context,
+                options,
+                allow_multiple,
+                allow_freeform,
+                reply: reply_tx,
+            };
+
+            if tx.send(request).is_err() {
+                return ToolResult::err("ask_user failed: UI channel closed");
+            }
+
+            match reply_rx.await {
+                Ok(AskUserResponse::Answer(answer)) => ToolResult::ok(answer),
+                Ok(AskUserResponse::Cancelled) => ToolResult::err("ask_user cancelled by user"),
+                Err(_) => ToolResult::err("ask_user failed: reply channel closed"),
+            }
+        })
+    }
+}
+
+fn parse_options(raw: Option<&Value>) -> Vec<AskUserOption> {
+    let Some(value) = raw else {
+        return Vec::new();
+    };
+
+    let normalized = match value {
+        Value::Array(items) => Some(items.clone()),
+        // Some models (notably local ones) occasionally emit a JSON-encoded
+        // array as a string for complex tool args. Be lenient and parse it.
+        Value::String(s) => serde_json::from_str::<Value>(s).ok().and_then(|v| match v {
+            Value::Array(items) => Some(items),
+            _ => None,
+        }),
+        _ => None,
+    };
+
+    let Some(items) = normalized else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Value::String(s) => {
+                let title = s.trim();
+                if title.is_empty() {
+                    None
+                } else {
+                    Some(AskUserOption {
+                        title: title.to_string(),
+                        description: None,
+                    })
+                }
+            }
+            Value::Object(obj) => {
+                let title = obj.get("title").and_then(Value::as_str)?.trim();
+                if title.is_empty() {
+                    return None;
+                }
+                let description = obj
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned);
+                Some(AskUserOption {
+                    title: title.to_string(),
+                    description,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}

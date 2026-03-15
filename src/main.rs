@@ -96,22 +96,23 @@ async fn main() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let tools = register_builtin_tools();
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| ".".to_string());
-    let system_prompt = build_system_prompt(&tools, &cwd);
-
     let mut app = App::new(
         &current_model,
         &current_kind,
         AgentLoopConfig {
-            tools,
+            tools: std::collections::HashMap::new(),
             before_tool_call: None,
             after_tool_call: None,
             max_turns: 20,
         },
     );
+
+    let tools = register_builtin_tools(Some(app.ask_request_tx()));
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| ".".to_string());
+    let system_prompt = build_system_prompt(&tools, &cwd);
+    app.agent_config.tools = tools;
     app.system_prompt = Some(system_prompt);
 
     loop {
@@ -241,7 +242,7 @@ async fn run(
                         // ── Selection menu mode ───────────────────────────────
                         if app.selection_mode {
                             match key.code {
-                                KeyCode::Up   => app.selection_select_prev(),
+                                KeyCode::Up => app.selection_select_prev(),
                                 KeyCode::Down => app.selection_select_next(),
                                 KeyCode::Enter if key.modifiers.is_empty() => {
                                     match app.apply_selection() {
@@ -254,17 +255,31 @@ async fn run(
                                         Some(SelectionResult::LoginProvider(p)) => {
                                             app.start_login(&p);
                                         }
+                                        Some(SelectionResult::AskOption(answer)) => {
+                                            app.select_pending_ask_option(answer);
+                                        }
+                                        Some(SelectionResult::AskFreeform) => {
+                                            app.enter_ask_freeform_mode();
+                                        }
                                         None => {}
                                     }
                                 }
-                                KeyCode::Esc => app.exit_selection_mode(),
+                                KeyCode::Esc => {
+                                    if app.has_pending_ask() {
+                                        app.cancel_pending_ask();
+                                    } else {
+                                        app.exit_selection_mode();
+                                    }
+                                }
                                 _ => {}
                             }
                             continue;
                         }
 
                         if key.code == KeyCode::Esc {
-                            if app.login_active {
+                            if app.has_pending_ask() {
+                                app.cancel_pending_ask();
+                            } else if app.login_active {
                                 app.cancel_login();
                             } else if app.in_slash_mode() {
                                 app.reset_textarea();
@@ -304,10 +319,10 @@ async fn run(
                             }
 
                             KeyCode::Enter if key.modifiers.is_empty() => {
-                                if app.in_slash_mode() {
-                                    let input = app.textarea.lines().first()
-                                        .cloned()
-                                        .unwrap_or_default();
+                                if app.has_pending_ask() {
+                                    app.submit_pending_ask_answer();
+                                } else if app.in_slash_mode() {
+                                    let input = app.textarea.lines().first().cloned().unwrap_or_default();
                                     let input = input.trim().to_string();
                                     app.reset_textarea();
 
@@ -387,6 +402,11 @@ async fn run(
                     return Ok(RunResult::RebuildProvider);
                 }
             }
+
+            // ── ask_user tool requests ─────────────────────────────────────────
+            Some(req) = app.ask_rx.recv() => {
+                app.receive_ask_request(req);
+            }
         }
     }
 }
@@ -418,7 +438,7 @@ async fn run_print_mode(
     let provider = build_provider(&current_kind, &current_model)
         .map_err(|e| io::Error::other(format!("provider error: {e}")))?;
 
-    let tools = register_builtin_tools();
+    let tools = register_builtin_tools(None);
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_string());

@@ -5,7 +5,10 @@ use std::sync::{
 use tui_textarea::{CursorMove, TextArea};
 
 use crate::{
-    agent::{AgentLoopConfig, run_agent_loop, types::AgentEvent},
+    agent::{
+        AgentLoopConfig, run_agent_loop,
+        types::{AgentEvent, AskRequest, AskRequestTx, AskUserOption, AskUserResponse},
+    },
     auth::{self, LoginEvent},
     commands::{self, CompletionItem},
     llm::{LlmProvider, Message, Role},
@@ -19,6 +22,13 @@ pub enum SelectionResult {
     Model(String),
     Provider(String),
     LoginProvider(String),
+    AskOption(String),
+    AskFreeform,
+}
+
+struct PendingAsk {
+    options: Vec<AskUserOption>,
+    allow_freeform: bool,
 }
 
 /// Maximum number of rows shown in the selection menu before scrolling.
@@ -85,6 +95,10 @@ pub struct App {
     auth_retry_budget: u8,
     login_cancel: Option<Arc<AtomicBool>>,
 
+    // ── ask_user overlay state ───────────────────────────────────────────────
+    pending_ask: Option<PendingAsk>,
+    ask_reply: Option<tokio::sync::oneshot::Sender<AskUserResponse>>,
+
     // ── Async channels ────────────────────────────────────────────────────────
     /// Receives AgentEvents forwarded from the active agent loop task.
     pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
@@ -95,6 +109,9 @@ pub struct App {
     /// Receives login status events from background auth tasks.
     pub(crate) login_rx: tokio::sync::mpsc::UnboundedReceiver<LoginEvent>,
     login_tx: tokio::sync::mpsc::UnboundedSender<LoginEvent>,
+    /// Receives ask_user requests from AskUserTool executions.
+    pub(crate) ask_rx: tokio::sync::mpsc::UnboundedReceiver<AskRequest>,
+    ask_tx: AskRequestTx,
 }
 
 // Convenience alias used throughout this module.
@@ -109,6 +126,7 @@ impl App {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (models_tx, models_rx) = tokio::sync::mpsc::unbounded_channel();
         let (login_tx, login_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (ask_tx, ask_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             messages: Vec::new(),
             textarea: Self::make_textarea(),
@@ -140,18 +158,26 @@ impl App {
             retry_after_refresh: false,
             auth_retry_budget: 0,
             login_cancel: None,
+            pending_ask: None,
+            ask_reply: None,
             event_rx,
             event_tx,
             models_rx,
             models_tx,
             login_rx,
             login_tx,
+            ask_rx,
+            ask_tx,
         }
     }
 
     /// Toggle the info bar visibility.
     pub fn toggle_info(&mut self) {
         self.show_info = !self.show_info;
+    }
+
+    pub fn ask_request_tx(&self) -> AskRequestTx {
+        self.ask_tx.clone()
     }
 
     fn make_textarea() -> TextArea<'static> {
@@ -378,11 +404,137 @@ impl App {
             SelectionResult::Model(name.to_string())
         } else if let Some(name) = item.complete_to.strip_prefix("/login ") {
             SelectionResult::LoginProvider(name.to_string())
+        } else if let Some(name) = item.complete_to.strip_prefix("/ask_user_option ") {
+            SelectionResult::AskOption(name.to_string())
+        } else if item.complete_to == "/ask_user_freeform" {
+            SelectionResult::AskFreeform
         } else {
             return None;
         };
         self.exit_selection_mode();
         Some(result)
+    }
+
+    pub fn has_pending_ask(&self) -> bool {
+        self.pending_ask.is_some()
+    }
+
+    pub fn receive_ask_request(&mut self, req: AskRequest) {
+        let AskRequest {
+            question,
+            context,
+            options,
+            allow_multiple,
+            allow_freeform,
+            reply,
+        } = req;
+
+        self.pending_ask = Some(PendingAsk {
+            options: options.clone(),
+            allow_freeform,
+        });
+        self.ask_reply = Some(reply);
+
+        let mut msg = format!("[ask_user] {question}");
+        if let Some(ctx) = &context {
+            msg.push_str("\n\nContext:\n");
+            msg.push_str(ctx);
+        }
+        if !options.is_empty() {
+            msg.push_str("\n\nOptions:");
+            for opt in &options {
+                msg.push_str("\n- ");
+                msg.push_str(&opt.title);
+                if let Some(desc) = &opt.description {
+                    msg.push_str(" — ");
+                    msg.push_str(desc);
+                }
+            }
+        }
+        if allow_multiple {
+            msg.push_str(
+                "\n\n[note: multi-select requested; current UI uses single-select fallback]",
+            );
+        }
+        self.messages.push(Message::assistant(msg));
+
+        if options.is_empty() {
+            self.exit_selection_mode();
+            self.reset_textarea();
+            return;
+        }
+
+        self.reset_textarea();
+        self.selection_mode = true;
+        self.selection_title = "  Ask user  ";
+        self.selection_selected = 0;
+        self.selection_scroll = 0;
+
+        self.selection_items = options
+            .iter()
+            .map(|opt| CompletionItem {
+                label: opt.title.clone(),
+                detail: opt.description.clone().unwrap_or_default(),
+                complete_to: format!("/ask_user_option {}", opt.title),
+                loading: false,
+            })
+            .collect();
+
+        if allow_freeform {
+            self.selection_items.push(CompletionItem {
+                label: "Type a custom response…".to_string(),
+                detail: String::new(),
+                complete_to: "/ask_user_freeform".to_string(),
+                loading: false,
+            });
+        }
+    }
+
+    pub fn enter_ask_freeform_mode(&mut self) {
+        self.exit_selection_mode();
+        self.reset_textarea();
+    }
+
+    pub fn submit_pending_ask_answer(&mut self) {
+        let Some(pending) = self.pending_ask.as_ref() else {
+            return;
+        };
+
+        if !pending.allow_freeform && !pending.options.is_empty() {
+            return;
+        }
+
+        let text = self.textarea.lines().join("\n").trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+
+        self.messages.push(Message::user(text.clone()));
+        self.finish_pending_ask(AskUserResponse::Answer(text));
+    }
+
+    pub fn select_pending_ask_option(&mut self, answer: String) {
+        if self.pending_ask.is_none() {
+            return;
+        }
+        self.messages.push(Message::user(answer.clone()));
+        self.finish_pending_ask(AskUserResponse::Answer(answer));
+    }
+
+    pub fn cancel_pending_ask(&mut self) {
+        if self.pending_ask.is_none() {
+            return;
+        }
+        self.finish_pending_ask(AskUserResponse::Cancelled);
+    }
+
+    fn finish_pending_ask(&mut self, answer: AskUserResponse) {
+        if let Some(reply) = self.ask_reply.take() {
+            let _ = reply.send(answer);
+        }
+        self.pending_ask = None;
+        self.exit_selection_mode();
+        self.reset_textarea();
     }
 
     pub fn start_login(&mut self, provider: &str) {

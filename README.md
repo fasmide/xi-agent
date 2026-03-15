@@ -93,6 +93,7 @@ The agent has access to five tools out of the box:
 | `edit`      | 📝    | Replace exact text in a file                     |
 | `bash`      | 💻    | Run a shell command, return stdout/stderr         |
 | `find`      | 🔍    | Search files by name glob or content pattern     |
+| `ask_user`  | ❓    | Ask the user a question and wait for an answer   |
 
 ## Non-interactive mode
 

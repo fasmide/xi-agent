@@ -34,17 +34,22 @@ pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str) -> String {
     let has = |name: &str| tool_names.contains(&name);
     let mut guidelines: Vec<&str> = Vec::new();
 
-    if has("👀") && has("📝") {
-        guidelines.push("Use 👀 to examine files before editing.");
+    if has("read_file") && has("edit_file") {
+        guidelines.push("Use read_file to examine files before editing.");
     }
-    if has("📝") {
-        guidelines.push("Use 📝 for precise changes — old_text must match exactly.");
+    if has("edit_file") {
+        guidelines.push("Use edit_file for precise changes — old_text must match exactly.");
     }
-    if has("✍️") {
-        guidelines.push("Use ✍️ only for new files or complete rewrites.");
+    if has("write_file") {
+        guidelines.push("Use write_file only for new files or complete rewrites.");
     }
-    if has("🔍") || has("💻") {
-        guidelines.push("Use 🔍 or 💻 to explore the filesystem rather than guessing paths.");
+    if has("find_files") || has("bash") {
+        guidelines
+            .push("Use find_files or bash to explore the filesystem rather than guessing paths.");
+    }
+    if has("ask_user") {
+        guidelines.push("Use ask_user only when the task requires a user decision or information you cannot infer.");
+        guidelines.push("Before calling ask_user, gather relevant context with your other tools and include a short summary in the context field.");
     }
     guidelines.push("Be concise. Show file paths clearly when working with files.");
     guidelines.push("Always use your tools to answer questions about files and the system — do not write code that the user would have to run themselves.");

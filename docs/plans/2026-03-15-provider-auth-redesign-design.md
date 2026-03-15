@@ -197,12 +197,14 @@ Add `/login [provider]`.
 - `/login copilot` → start Copilot device flow
 - `/login codex` → start Codex browser OAuth flow
 
-While login is active, the app enters a dedicated auth mode:
-
-- show a modal or overlay over normal chat input
-- disable regular chat submission
-- allow `Esc` to cancel
-- append concise success/failure status to the chat log when finished
+- while login is active, a **bottom-panel** replaces the input area (same
+  vertical layout slot as the selection menu):
+  - header row: provider name on the left, `Esc cancel` hint on the right
+  - content rows: status/progress line; URL row with an OSC 8 hyperlink
+    (`open in browser →`) once the URL is available; optional device code row
+  - browser opened automatically via `xdg-open` / `open`; the OSC 8 link is a
+    fallback for environments where that fails
+  - `Esc` cancels; success/failure appended as a chat log message
 
 ### Copilot initial authentication
 
@@ -225,12 +227,17 @@ OpenAI Codex flow.
 Flow:
 
 1. create PKCE verifier/challenge and state
-2. open browser to OpenAI auth URL
-3. listen on localhost callback endpoint
+2. open browser to OpenAI auth URL (`redirect_uri=http://localhost:1455/auth/callback`)
+3. listen on `127.0.0.1:1455` for the OAuth callback
 4. complete login automatically if callback arrives
 5. exchange authorization code for tokens
 6. extract `account_id` from the access token
 7. persist credentials in tau auth storage
+
+Note: the `redirect_uri` sent to the auth server must be
+`http://localhost:1455/auth/callback` (the registered value for client
+`app_EMoamEEZ73f0CkXaXp7hrann`). Using `127.0.0.1` instead causes an
+`unknown_error` because the server performs an exact string comparison.
 
 If callback setup fails or callback never arrives, fail clearly and ask the
 user to retry `/login codex` in a suitable environment.

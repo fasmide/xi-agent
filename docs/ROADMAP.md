@@ -50,7 +50,10 @@ sessions, and `Ctrl+R` resumes the latest session for the current folder.
 Auth is tau-owned and no longer depends on `~/.pi` credentials.
 - `src/auth/` subsystem: paths, types, atomic store (temp+rename, 0o600), copilot and codex modules
 - `/login` flows for `copilot` (device flow) and `codex` (browser OAuth + localhost callback)
-- TUI login overlay with cancel (Esc), progress events, and success/failure feedback in chat log
+- TUI login panel injected at the bottom of the screen (same layout slot as the
+  selection menu): header row with provider name and Esc hint, content rows
+  with status and an OSC 8 hyperlink ("open in browser →"); browser opened
+  automatically via `xdg-open` / `open`
 - provider startup checks with clear guidance (`Not authenticated… Run /login <provider>`)
 - 401 → silent refresh → one retry in TUI mode; refresh failure surfaces a re-login prompt
 

@@ -23,7 +23,7 @@ impl AuthStore {
         let data = if path.exists() {
             let text = fs::read_to_string(&path)
                 .map_err(|e| anyhow::anyhow!("Cannot read {}: {}", path.display(), e))?;
-            serde_json::from_str::<AuthFile>(&text)
+            toml::from_str::<AuthFile>(&text)
                 .map_err(|e| anyhow::anyhow!("Cannot parse {}: {}", path.display(), e))?
         } else {
             AuthFile::default()
@@ -101,10 +101,10 @@ fn save_atomic(path: &Path, data: &AuthFile) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", parent.display(), e))?;
     }
 
-    let serialized = serde_json::to_string_pretty(data)
+    let serialized = toml::to_string_pretty(data)
         .map_err(|e| anyhow::anyhow!("Cannot serialize auth file: {}", e))?;
 
-    let tmp_path = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let tmp_path = path.with_extension(format!("toml.tmp.{}", std::process::id()));
     {
         let mut file = fs::File::create(&tmp_path)
             .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", tmp_path.display(), e))?;

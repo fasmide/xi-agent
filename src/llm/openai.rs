@@ -39,7 +39,7 @@ impl OpenAiProvider {
         }
     }
 
-    /// Build from environment variables, named presets, and/or auth.json.
+    /// Build from environment variables and named presets.
     ///
     /// Resolution order:
     /// - `PIRS_PRESET` selects a named preset (openrouter, groq) which

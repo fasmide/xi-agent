@@ -25,9 +25,9 @@ cargo build --release
 
 | Provider         | Key / credential                                      | Env var override     |
 |------------------|-------------------------------------------------------|----------------------|
-| `copilot`        | pirs auth store (`auth.json` in platform config dir) | —                    |
+| `copilot`        | pirs auth store (`auth.toml` in platform config dir) | —                    |
 | `openai`         | `OPENAI_API_KEY`                                      | `OPENAI_MODEL`       |
-| `codex`          | pirs auth store (`auth.json` in platform config dir) | `OPENAI_MODEL`       |
+| `codex`          | pirs auth store (`auth.toml` in platform config dir) | `OPENAI_MODEL`       |
 | `ollama`         | none (local)                                          | `OLLAMA_BASE_URL`, `OPENAI_MODEL` |
 
 The default provider is `copilot`. Override at startup:

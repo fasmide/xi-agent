@@ -10,5 +10,5 @@ pub fn config_dir() -> anyhow::Result<PathBuf> {
 }
 
 pub fn auth_file_path() -> anyhow::Result<PathBuf> {
-    Ok(config_dir()?.join("auth.json"))
+    Ok(config_dir()?.join("auth.toml"))
 }

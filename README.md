@@ -14,6 +14,10 @@ multi-provider streaming, tool-calling, inline tool display, thinking output,
 and slash commands are all implemented. See [ROADMAP](docs/ROADMAP.md) for
 what's coming next.
 
+## License
+
+MIT. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Build & Run
 
 ```sh

@@ -46,53 +46,70 @@ Conversation history is persisted to session files under the tau data dir,
 keyed by working folder metadata. `/resume` opens a picker for local + foreign
 sessions, and `Ctrl+R` resumes the latest session for the current folder.
 
-### Provider authentication redesign (initial)
+### Provider authentication redesign
 Auth is tau-owned and no longer depends on `~/.pi` credentials.
-Implemented pieces include:
-- `/login` flows for `copilot` (device flow) and `codex` (browser OAuth callback)
-- provider startup checks with clear guidance (e.g. `Run /login <provider>`)
-- token refresh support in auth modules plus one in-app retry path on auth `401`
+- `src/auth/` subsystem: paths, types, atomic store (temp+rename, 0o600), copilot and codex modules
+- `/login` flows for `copilot` (device flow) and `codex` (browser OAuth + localhost callback)
+- TUI login overlay with cancel (Esc), progress events, and success/failure feedback in chat log
+- provider startup checks with clear guidance (`Not authenticated… Run /login <provider>`)
+- 401 → silent refresh → one retry in TUI mode; refresh failure surfaces a re-login prompt
 
 ---
 
 ## 🔴 High priority
 
-### 1. Authentication hardening and coverage
-Initial auth redesign is implemented; remaining work is reliability and test coverage:
-- extend refresh/retry handling to remaining auth edge paths (notably non-TUI/print mode)
-- tighten recovery UX and first-run messaging around expired/missing credentials
-- add focused integration tests for auth and provider startup/retry paths
+### 1. Tests
+A small unit-test baseline exists, but coverage of the auth subsystem and the
+agent loop is still missing. Priority areas:
 
-Reference design: [provider auth redesign](plans/2026-03-15-provider-auth-redesign-design.md).
+- **Auth store**: round-trip serialization, single-provider updates preserve
+  other entries, atomic persistence ✓ done
+- **Agent loop**: 401 triggers exactly one refresh and one retry; failed refresh
+  produces a re-login prompt rather than a silent fallback
+
+### 2. HTTP-dependent auth tests
+The `copilot::refresh`, `codex::refresh`, `copilot::login`, and `codex::login`
+functions make real HTTP calls and are not yet covered by tests. Requires a
+mock HTTP server (e.g. `wiremock`) as a dev-dependency. Priority cases:
+
+- `refresh` succeeds → credentials updated in store
+- `refresh` returns 4xx → error propagated, re-login prompt shown
+- `login` device/OAuth flow happy path
+- `login` cancelled → `LoginEvent::Error` with "cancelled" message
+
+See [plan](plans/2026-03-15-auth-tests-plan.md).
 
 ---
 
 ## 🟡 Medium priority
 
-### 2. OS keyring / credential storage
-After the auth redesign lands, move secrets out of `auth.toml` and into the
-platform credential store:
+### 2. Auth edge-case hardening
+The TUI refresh/retry path works. Two small gaps remain:
+
+- **Print mode (`--print`)**: a 401 mid-stream is surfaced as a plain error
+  with no refresh+retry; add the same one-shot refresh logic that the TUI loop
+  already has.
+- **Proactive expiry check**: `build_provider` hands expired credentials
+  straight to the provider, causing an avoidable 401 round-trip; check
+  `expires_at` at provider-build time and refresh before connecting.
+
+### 3. OS keyring / credential storage
+Move secrets out of `auth.toml` and into the platform credential store:
 - macOS Keychain
 - Windows Credential Manager
 - Linux Secret Service / keyring
 
 Keep only non-secret metadata in the tau app config directory. This improves
-security without coupling tau back to `~/.pi`.
+security and is a natural follow-on now that the auth subsystem has a clean
+storage interface.
 
-### 3. Context window management
+### 4. Context window management
 Long agentic sessions silently degrade when the conversation history exceeds
 the model's context window. Implement a soft-limit warning and a truncation
 strategy (drop oldest non-system messages, or summarise) before the window
 fills.
 
 See [plan](plans/2026-03-14-context-management.md).
-
-### 4. Tests
-A small unit-test baseline exists, but integration coverage is still missing.
-Add integration-shaped tests for the agent loop and provider behavior to reduce
-refactor risk.
-
-See [plan](plans/2026-03-14-tests.md).
 
 ---
 

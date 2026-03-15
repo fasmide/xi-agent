@@ -152,8 +152,8 @@ provider is active.
   [plan](plans/2026-03-14-context-management.md).
 - **Anthropic and Gemini providers** — only Copilot, OpenAI, Codex, and
   Ollama are implemented.
-- **Deeper test coverage** — a small unit-test baseline exists, but there are
-  no integration tests for end-to-end provider/agent workflows yet. See
-  [plan](plans/2026-03-14-tests.md).
+- **Deeper test coverage** — auth store persistence is covered; tool
+  implementations, agent loop, and provider wire format still lack tests. See
+  [plan](plans/2026-03-14-tests.md) and [auth tests plan](plans/2026-03-15-auth-tests-plan.md).
 
 See [ROADMAP](ROADMAP.md) for prioritised work items.

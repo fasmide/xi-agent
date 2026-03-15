@@ -29,3 +29,6 @@ urlencoding = "2.1"
 log = "0.4"
 simplelog = "0.12"
 toml = { version = "0.8", features = ["parse"] }
+
+[dev-dependencies]
+tempfile = "3"

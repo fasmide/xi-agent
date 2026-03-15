@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -44,7 +44,12 @@ const SELECTION_SEL_BG: Color = Color::Rgb(30, 90, 30);
 /// Foreground colour for model names in the selection menu.
 const SELECTION_ITEM_FG: Color = Color::Rgb(140, 220, 140);
 
-/// The textarea itself is owned by `App` with no styling baked in;
+/// Background colour of the login panel header.
+const LOGIN_HEADER_BG: Color = Color::Rgb(20, 30, 60);
+
+/// Background colour of the login panel content rows.
+const LOGIN_CONTENT_BG: Color = Color::Rgb(15, 22, 48);
+
 /// all rendering concerns live here.
 fn style_textarea(app: &mut App) {
     // The Block's style fills every cell the widget owns (including empty
@@ -80,6 +85,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let terminal_height = f.area().height as usize;
     let width = f.area().width as usize;
 
+    // Reset every frame; only set again below if the login panel is visible.
+    app.login_url_link_pos = None;
+
     let input_line_count = app.textarea.lines().len().max(1);
     let max_input_height = (terminal_height * 40 / 100).max(1);
     let input_height = input_line_count.min(max_input_height) as u16;
@@ -87,10 +95,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // Info bar: 1 row when show_info is active, 0 otherwise.
     let info_height: u16 = if app.show_info { 1 } else { 0 };
 
-    // Completion popup: one row per matching completion. When there are no
-    // completions, optionally reserve one row for the Ctrl+R resume hint.
+    // Completion popup: suppressed while login is active.
     let resume_hint_visible = app.should_show_resume_hint();
-    let completion_height = if app.selection_mode {
+    let completion_height = if app.login_active || app.selection_mode {
         0
     } else if !app.completions.is_empty() {
         app.completions.len() as u16
@@ -100,38 +107,69 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         0
     };
 
-    // Selection menu: header + capped item list (0 when not in selection mode).
-    let selection_header_height: u16 = if app.selection_mode { 1 } else { 0 };
-    let selection_items_height: u16 = if app.selection_mode {
+    // Selection menu: suppressed while login is active.
+    let selection_header_height: u16 = if app.selection_mode && !app.login_active {
+        1
+    } else {
+        0
+    };
+    let selection_items_height: u16 = if app.selection_mode && !app.login_active {
         app.selection_items.len().min(MAX_SELECTION_VISIBLE) as u16
     } else {
         0
     };
 
-    // Layout: chat log | completion popup | selection header | selection items
+    // ── Login panel dimensions ─────────────────────────────────────────────
+    // When login is active the input box and its halfblock borders are hidden;
+    // the login header + content rows take their place.
+    let login_header_height: u16 = if app.login_active { 1 } else { 0 };
+    let login_content_height: u16 = if app.login_active {
+        let mut h = 1usize; // status/info line
+        if app.login_url.is_some() {
+            h += 1; // blank separator
+            h += 1; // single URL link row
+        }
+        if app.login_code.is_some() {
+            h += 1;
+        }
+        h as u16
+    } else {
+        0
+    };
+
+    // Input area and its halfblock borders are suppressed during login.
+    let effective_input_height = if app.login_active { 0 } else { input_height };
+    let hb_height: u16 = if app.login_active { 0 } else { 1 };
+
+    // Layout: chat log | completions | sel header | sel items
+    //       | login header | login content
     //       | top halfblock | input | bottom halfblock | info bar
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),                          // 0: chat log
-            Constraint::Length(completion_height),       // 1: completion popup
-            Constraint::Length(selection_header_height), // 2: selection header
-            Constraint::Length(selection_items_height),  // 3: selection items
-            Constraint::Length(1),                       // 4: ▄ top edge of input panel
-            Constraint::Length(input_height),            // 5: input textarea
-            Constraint::Length(1),                       // 6: ▀ bottom edge of input panel
-            Constraint::Length(info_height),             // 7: info bar (optional)
+            Constraint::Min(1),                            // 0: chat log
+            Constraint::Length(completion_height),         // 1: completion popup
+            Constraint::Length(selection_header_height),   // 2: selection header
+            Constraint::Length(selection_items_height),    // 3: selection items
+            Constraint::Length(login_header_height),       // 4: login header
+            Constraint::Length(login_content_height),      // 5: login content
+            Constraint::Length(hb_height),                 // 6: ▄ top edge
+            Constraint::Length(effective_input_height),    // 7: input textarea
+            Constraint::Length(hb_height),                 // 8: ▀ bottom edge
+            Constraint::Length(info_height),               // 9: info bar
         ])
         .split(f.area());
 
-    let log_area = chunks[0];
+    let log_area        = chunks[0];
     let completion_area = chunks[1];
     let sel_header_area = chunks[2];
-    let sel_items_area = chunks[3];
-    let top_hb_area = chunks[4];
-    let input_area = chunks[5];
-    let bot_hb_area = chunks[6];
-    let info_area = chunks[7];
+    let sel_items_area  = chunks[3];
+    let login_hdr_area  = chunks[4];
+    let login_body_area = chunks[5];
+    let top_hb_area     = chunks[6];
+    let input_area      = chunks[7];
+    let bot_hb_area     = chunks[8];
+    let info_area       = chunks[9];
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
@@ -198,7 +236,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     // ── Selection menu ────────────────────────────────────────────────────────
-    if app.selection_mode {
+    if app.selection_mode && !app.login_active {
         // Header row: title on the left, key hints on the right.
         const HINTS: &str = "↑↓ navigate   Enter select   Esc cancel  ";
         let title = app.selection_title;
@@ -244,18 +282,54 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         }
     }
 
+    // ── Login panel ───────────────────────────────────────────────────────────
+    if app.login_active {
+        let provider = app
+            .login_provider
+            .clone()
+            .unwrap_or_else(|| "provider".to_string());
+
+        // Header row.
+        const ESC_HINT: &str = "Esc cancel  ";
+        let title = format!("  Authenticating: {provider}");
+        let gap = width.saturating_sub(title.width() + ESC_HINT.width());
+        let header_line = Line::from(vec![
+            Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::White)
+                    .bg(LOGIN_HEADER_BG)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ),
+            Span::styled(" ".repeat(gap), Style::default().bg(LOGIN_HEADER_BG)),
+            Span::styled(
+                ESC_HINT,
+                Style::default().fg(Color::DarkGray).bg(LOGIN_HEADER_BG),
+            ),
+        ]);
+        f.render_widget(Paragraph::new(vec![header_line]), login_hdr_area);
+
+        // Content rows.
+        let content_lines = build_login_content_lines(app, login_body_area.y, width);
+        f.render_widget(Paragraph::new(content_lines), login_body_area);
+    }
+
     // ── Halfblock edges ───────────────────────────────────────────────────────
-    f.render_widget(
-        Paragraph::new(halfblock_line(width, '▄', INPUT_BG)),
-        top_hb_area,
-    );
-    f.render_widget(
-        Paragraph::new(halfblock_line(width, '▀', INPUT_BG)),
-        bot_hb_area,
-    );
+    if !app.login_active {
+        f.render_widget(
+            Paragraph::new(halfblock_line(width, '▄', INPUT_BG)),
+            top_hb_area,
+        );
+        f.render_widget(
+            Paragraph::new(halfblock_line(width, '▀', INPUT_BG)),
+            bot_hb_area,
+        );
+    }
 
     // ── Input box ─────────────────────────────────────────────────────────────
-    f.render_widget(&app.textarea, input_area);
+    if !app.login_active {
+        f.render_widget(&app.textarea, input_area);
+    }
 
     // ── Info bar ──────────────────────────────────────────────────────────────
     if app.show_info {
@@ -266,49 +340,68 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         let info_line = build_info_line(&app.current_provider, &app.current_model, &ctx_str, width);
         f.render_widget(Paragraph::new(vec![info_line]), info_area);
     }
+}
 
-    if app.login_active {
-        let w = f.area().width.saturating_sub(8).min(90);
-        let h: u16 = 8;
-        let x = (f.area().width.saturating_sub(w)) / 2;
-        let y = (f.area().height.saturating_sub(h)) / 2;
-        let area = ratatui::layout::Rect::new(x, y, w, h);
+// ── Login panel content rendering ─────────────────────────────────────────────
 
-        let mut lines: Vec<Line<'static>> = vec![];
-        let provider = app
-            .login_provider
-            .clone()
-            .unwrap_or_else(|| "provider".to_string());
-        lines.push(Line::from(Span::styled(
-            format!("Login: {provider}"),
-            Style::default().fg(Color::White),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(app.login_info.clone()));
-        if let Some(url) = &app.login_url {
-            lines.push(Line::from(""));
-            lines.push(Line::from(format!("URL: {url}")));
-        }
-        if let Some(code) = &app.login_code {
-            lines.push(Line::from(format!("Code: {code}")));
-        }
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Press Esc to cancel",
-            Style::default().fg(Color::DarkGray),
-        )));
+/// The visible label rendered for the OSC 8 browser hyperlink.
+pub const LOGIN_LINK_LABEL: &str = "open in browser →";
+/// Column offset where the link label begins ("  URL: " = 7 chars).
+const LOGIN_LINK_COL: u16 = 7;
 
-        f.render_widget(Clear, area);
-        f.render_widget(
-            Paragraph::new(lines).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Authentication ")
-                    .style(Style::default().bg(Color::Rgb(18, 18, 30))),
-            ),
-            area,
-        );
+/// Build the content rows for the login panel (status line + URL link + code).
+/// Also records the terminal position of the URL link label in
+/// `app.login_url_link_pos` so the main loop can overlay OSC 8 escape codes
+/// after the Ratatui frame is flushed.
+fn build_login_content_lines(app: &mut App, login_body_top: u16, width: usize) -> Vec<Line<'static>> {
+    let status_style = Style::default().fg(Color::White).bg(LOGIN_CONTENT_BG);
+    let url_key_style = Style::default().fg(Color::Rgb(120, 200, 255)).bg(LOGIN_CONTENT_BG);
+    let url_val_style = Style::default().fg(Color::Rgb(100, 220, 100)).bg(LOGIN_CONTENT_BG)
+        .add_modifier(ratatui::style::Modifier::UNDERLINED);
+    let code_key_style = Style::default().fg(Color::Rgb(120, 200, 255)).bg(LOGIN_CONTENT_BG);
+    let code_val_style = Style::default().fg(Color::Yellow).bg(LOGIN_CONTENT_BG);
+    let fill_style = Style::default().bg(LOGIN_CONTENT_BG);
+    let fill = |used: usize| Span::styled(" ".repeat(width.saturating_sub(used)), fill_style);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Status / progress line (row 0 of the body area).
+    let info = app.login_info.clone();
+    let info_len = info.width();
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {info}"), status_style),
+        fill(2 + info_len),
+    ]));
+
+    if app.login_url.is_some() {
+        // Blank separator (row 1).
+        lines.push(Line::from(vec![fill(0)]));
+
+        // URL link row (row 2): Ratatui renders the visible label; the main
+        // loop overlays the OSC 8 sequence at the recorded position.
+        let url_row = login_body_top + 2;
+        app.login_url_link_pos = Some((url_row, LOGIN_LINK_COL));
+
+        let label_len = LOGIN_LINK_LABEL.width();
+        let used = LOGIN_LINK_COL as usize + label_len;
+        lines.push(Line::from(vec![
+            Span::styled("  URL: ", url_key_style),
+            Span::styled(LOGIN_LINK_LABEL, url_val_style),
+            fill(used),
+        ]));
     }
+
+    if let Some(code) = &app.login_code {
+        const CODE_PREFIX: &str = "  Code: ";
+        let used = CODE_PREFIX.len() + code.len();
+        lines.push(Line::from(vec![
+            Span::styled(CODE_PREFIX, code_key_style),
+            Span::styled(code.clone(), code_val_style),
+            fill(used),
+        ]));
+    }
+
+    lines
 }
 
 // ── Completion popup rendering ────────────────────────────────────────────────

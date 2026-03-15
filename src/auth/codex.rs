@@ -21,7 +21,7 @@ use tokio::{
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-const REDIRECT_URI: &str = "http://127.0.0.1:1455/auth/callback";
+const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 const SCOPE: &str = "openid profile email offline_access";
 const JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
 

@@ -96,6 +96,10 @@ pub struct App {
     pub retry_after_refresh: bool,
     auth_retry_budget: u8,
     login_cancel: Option<Arc<AtomicBool>>,
+    /// Set by `ui::draw()` each frame: terminal (row, col) of the "open in
+    /// browser" link label, used by the main loop to overlay OSC 8 hyperlink
+    /// escape codes after the Ratatui frame is flushed.
+    pub login_url_link_pos: Option<(u16, u16)>,
 
     // ── Session persistence ───────────────────────────────────────────────────
     session_store: Option<SessionStore>,
@@ -166,6 +170,7 @@ impl App {
             retry_after_refresh: false,
             auth_retry_budget: 0,
             login_cancel: None,
+            login_url_link_pos: None,
             session_store: None,
             current_session_id: None,
             current_cwd: String::new(),

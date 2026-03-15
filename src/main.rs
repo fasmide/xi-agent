@@ -235,6 +235,26 @@ async fn run(
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
+        // After each Ratatui frame, overlay an OSC 8 hyperlink on the URL
+        // label if the login panel is showing a URL.  Ratatui knows nothing
+        // about OSC 8, so we inject the escape sequence directly into stdout.
+        // Because Ratatui's differential renderer only redraws changed cells,
+        // the OSC 8 state persists across frames where the URL row is static.
+        if let (Some((row, col)), Some(url)) =
+            (app.login_url_link_pos, &app.login_url)
+        {
+            use crossterm::style::Print;
+            let seq = format!(
+                "\x1b]8;;{url}\x1b\\{label}\x1b]8;;\x1b\\",
+                label = ui::LOGIN_LINK_LABEL,
+            );
+            execute!(
+                io::stdout(),
+                crossterm::cursor::MoveTo(col, row),
+                Print(seq),
+            )?;
+        }
+
         tokio::select! {
             // ── Terminal input ────────────────────────────────────────────────
             Some(Ok(ev)) = crossterm_events.next() => {

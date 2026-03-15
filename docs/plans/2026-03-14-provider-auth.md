@@ -1,8 +1,12 @@
 # Provider Authentication / Login
 
 **Date:** 2026-03-14  
-**Status:** Planned  
+**Status:** Superseded  
 **Priority:** High
+
+> Superseded by `docs/plans/2026-03-15-provider-auth-redesign-design.md`.
+> This earlier plan assumed `~/.pi` compatibility and a non-interactive Codex
+> flow, which no longer matches the approved design.
 
 ## Problem
 

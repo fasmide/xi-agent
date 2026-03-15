@@ -17,6 +17,13 @@ textwrap = "0.16"
 ignore = "0.4"
 globset = "0.4"
 chrono = "0.4"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "net"] }
 tui-textarea = { version = "0.7", default-features = false, features = ["crossterm"] }
 unicode-width = "0.2"
+directories = "5.0"
+base64 = "0.22"
+sha2 = "0.10"
+getrandom = "0.2"
+urlencoding = "2.1"
+log = "0.4"
+simplelog = "0.12"

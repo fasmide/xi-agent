@@ -21,10 +21,7 @@ pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str) -> String {
         tool_names
             .iter()
             .map(|name| {
-                let desc = tools
-                    .get(*name)
-                    .map(|t| t.description())
-                    .unwrap_or(*name);
+                let desc = tools.get(*name).map(|t| t.description()).unwrap_or(*name);
                 // Trim the description to its first sentence for brevity.
                 let short = first_sentence(desc);
                 format!("- {name}: {short}")

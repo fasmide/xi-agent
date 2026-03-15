@@ -38,22 +38,23 @@ Active provider and model shown in the Ctrl+I info bar. `/provider` and
 
 ## 🔴 High priority
 
-### 1. Provider authentication / login
-There is no way to authenticate from inside pirs. Missing credentials cause
-a silent fallback. Users must manually obtain and place tokens before first
-use.
+### 1. Provider authentication / login redesign
+Current pirs reads subscription credentials from `~/.pi`, which is the wrong
+ownership model and effectively reuses another app's tokens. Missing creds also
+cause a poor startup experience.
 
-Add a `/login [provider]` slash command that runs the appropriate flow:
-- **Copilot**: GitHub OAuth device flow — show a one-time code and URL,
-  poll in the background, exchange for a Copilot session token, store in
-  `~/.pi/agent/auth.json`.
-- **OpenAI**: prompt for an API key (masked input), store in `auth.json`.
-- **Codex**: out of scope (browser-extracted session); document manual steps.
+Redesign auth around a pirs-owned store in a platform-appropriate app config
+location, with **interactive initial authentication** inside the TUI:
+- **Copilot**: GitHub device flow — show verification URL and code, poll in
+  the background, exchange for a Copilot session token, and store in pirs's
+  own auth file.
+- **Codex**: browser OAuth + localhost callback only (no manual token/code
+  paste path).
 
-Also: detect 401 responses during chat and trigger a re-login/token-refresh
-instead of failing silently.
+Also: refresh expired tokens automatically and retry once on `401`, with a
+clear re-login path if refresh fails.
 
-See [plan](plans/2026-03-14-provider-auth.md).
+See [design](plans/2026-03-15-provider-auth-redesign-design.md).
 
 ### 2. `ask_user` tool
 Add a sixth built-in tool the model can call when it reaches a genuine
@@ -68,7 +69,7 @@ truly necessary.
 
 See [plan](plans/2026-03-14-ask-user-tool.md).
 
-### 2. Fix clippy warnings
+### 3. Fix clippy warnings
 `cargo clippy` reports 19 warnings — mostly collapsible `if` chains,
 redundant closures, and simplifiable expressions. `codex.rs` suppresses
 additional issues with `#![allow(dead_code)]`.
@@ -82,14 +83,24 @@ either use or remove the dead items.
 
 ## 🟡 Medium priority
 
-### 3. Config file
+### 3. OS keyring / credential storage
+After the auth redesign lands, move secrets out of `auth.json` and into the
+platform credential store:
+- macOS Keychain
+- Windows Credential Manager
+- Linux Secret Service / keyring
+
+Keep only non-secret metadata in the pirs app config directory. This improves
+security without coupling pirs back to `~/.pi`.
+
+### 4. Config file
 Provide a persistent `~/.config/pirs/config.toml` for API keys, default
 provider, and per-provider default model. Env vars and CLI flags override
 the config file. Eliminates the need to set env vars on every launch.
 
 See [plan](plans/2026-03-14-config-file.md).
 
-### 4. Context window management
+### 5. Context window management
 Long agentic sessions silently degrade when the conversation history exceeds
 the model's context window. Implement a soft-limit warning and a truncation
 strategy (drop oldest non-system messages, or summarise) before the window
@@ -97,7 +108,7 @@ fills.
 
 See [plan](plans/2026-03-14-context-management.md).
 
-### 5. Tests
+### 6. Tests
 No unit or integration tests exist. Adds fragility risk for refactors and
 new provider work.
 
@@ -107,23 +118,23 @@ See [plan](plans/2026-03-14-tests.md).
 
 ## 🟢 Lower priority
 
-### 6. Anthropic provider
+### 7. Anthropic provider
 `AnthropicProvider` implementing `LlmProvider` against the Anthropic
 Messages API (`/v1/messages`). Include native tool-calling support and
 `thinking` block extraction.
 
-### 7. Gemini provider
+### 8. Gemini provider
 `GeminiProvider` implementing `LlmProvider` against the Google Gemini API.
 
-### 8. Provider status discoverability
+### 9. Provider status discoverability
 The active provider and model are hidden behind `Ctrl+I`. Show a minimal
 status indicator (e.g. in the input panel border label) so new users know
 which backend is active without having to discover the keybinding.
 
-### 9. Fetch URL tool
+### 10. Fetch URL tool
 `fetch` tool: HTTP GET a URL, return the response body (plain text or
 truncated HTML). Useful for research tasks.
 
-### 10. Conversation persistence
+### 11. Conversation persistence
 Save and restore conversation history across sessions. A simple JSONL log
 per session under `~/.local/share/pirs/` would suffice.

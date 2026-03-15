@@ -29,6 +29,12 @@ pub static COMMANDS: &[SlashCommand] = &[
         takes_arg: true,
     },
     SlashCommand {
+        name: "login",
+        usage: "/login <provider>",
+        description: "Authenticate provider (copilot / codex)",
+        takes_arg: true,
+    },
+    SlashCommand {
         name: "quit",
         usage: "/quit",
         description: "Quit the application",
@@ -139,6 +145,16 @@ pub fn completions_for(
                     .filter(|p| p.name().starts_with(arg))
                     .map(|p| CompletionItem::from_provider(p.name(), p.label()))
                     .collect(),
+                "login" => ["copilot", "codex"]
+                    .iter()
+                    .filter(|p| p.starts_with(arg))
+                    .map(|p| CompletionItem {
+                        label: (*p).to_string(),
+                        detail: String::new(),
+                        complete_to: format!("/login {p}"),
+                        loading: false,
+                    })
+                    .collect(),
                 _ => vec![],
             }
         }
@@ -165,6 +181,10 @@ pub enum CommandAction {
     Provider(String),
     /// `/provider` typed with no argument — show interactive selection menu.
     ProviderNoArg,
+    /// Authenticate with provider by name (`copilot`, `codex`).
+    Login(String),
+    /// `/login` with no argument — show login provider picker.
+    LoginNoArg,
 }
 
 /// Parse a complete slash command input string into an action.
@@ -176,12 +196,14 @@ pub fn parse(input: &str) -> Option<CommandAction> {
         None => (rest, ""),
     };
     match name {
-        "new"                      => Some(CommandAction::New),
-        "quit"                     => Some(CommandAction::Quit),
+        "new" => Some(CommandAction::New),
+        "quit" => Some(CommandAction::Quit),
         "model" if !arg.is_empty() => Some(CommandAction::Model(arg.to_string())),
-        "model"                    => Some(CommandAction::ModelNoArg),
+        "model" => Some(CommandAction::ModelNoArg),
         "provider" if !arg.is_empty() => Some(CommandAction::Provider(arg.to_string())),
-        "provider"                 => Some(CommandAction::ProviderNoArg),
-        _                          => None,
+        "provider" => Some(CommandAction::ProviderNoArg),
+        "login" if !arg.is_empty() => Some(CommandAction::Login(arg.to_string())),
+        "login" => Some(CommandAction::LoginNoArg),
+        _ => None,
     }
 }

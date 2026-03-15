@@ -1,10 +1,9 @@
-
-use std::collections::HashMap;
 use futures_util::StreamExt;
+use std::collections::HashMap;
 
 use super::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role, ToolDefinition};
 
-const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
+pub const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
 pub struct CodexProvider {
     base_url: String,
@@ -30,32 +29,12 @@ impl CodexProvider {
         }
     }
 
-    pub fn from_env() -> anyhow::Result<Self> {
-        let base_url = std::env::var("CODEX_BASE_URL")
-            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
-        let model = std::env::var("OPENAI_MODEL")
-            .unwrap_or_else(|_| "gpt-5.4".to_string());
-        let (api_key, account_id) = read_codex_auth()?;
-        Ok(Self::new(base_url, model, api_key, account_id))
-    }
-
-    pub fn with_model(&self, model: impl Into<String>) -> Self {
-        Self {
-            base_url: self.base_url.clone(),
-            model: model.into(),
-            api_key: self.api_key.clone(),
-            account_id: self.account_id.clone(),
-            client: self.client.clone(),
-        }
-    }
-
     fn stream_inner(&self, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> LlmStream {
         let url = resolve_codex_url(&self.base_url);
         let model = self.model.clone();
         let api_key = self.api_key.clone();
         let account_id = self.account_id.clone();
         let client = self.client.clone();
-        let debug = std::env::var("PIRS_DEBUG").is_ok();
 
         Box::pin(async_stream::stream! {
             // Separate system prompt from the rest.
@@ -84,9 +63,10 @@ impl CodexProvider {
                 body["tools"] = serde_json::json!(convert_tools(&tools));
             }
 
-            if debug {
-                eprintln!("[PIRS_DEBUG] → codex request:\n{}", serde_json::to_string_pretty(&body).unwrap_or_default());
-            }
+            log::debug!(
+                "[PIRS_DEBUG] → codex request:\n{}",
+                serde_json::to_string_pretty(&body).unwrap_or_default()
+            );
 
             let response = match client
                 .post(&url)
@@ -108,6 +88,8 @@ impl CodexProvider {
             if !response.status().is_success() {
                 let status = response.status();
                 let text = response.text().await.unwrap_or_default();
+                let preview: String = text.chars().take(1000).collect();
+                log::warn!("codex api error: status={} body={}", status, preview);
                 yield LlmEvent::Error(format!("Codex returned {status}: {text}"));
                 return;
             }
@@ -148,10 +130,8 @@ impl CodexProvider {
                         return;
                     }
 
-                    if debug {
-                        eprintln!("[PIRS_DEBUG] ← chunk {line_num}: {data}");
-                        line_num += 1;
-                    }
+                    log::debug!("[PIRS_DEBUG] ← chunk {line_num}: {data}");
+                    line_num += 1;
 
                     let ev: serde_json::Value = match serde_json::from_str(data) {
                         Ok(v) => v,
@@ -265,27 +245,7 @@ impl CodexProvider {
     }
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-fn read_codex_auth() -> anyhow::Result<(String, String)> {
-    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("$HOME not set"))?;
-    let path = std::path::Path::new(&home).join(".pi/agent/auth.json");
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| anyhow::anyhow!("Cannot read {}: {}", path.display(), e))?;
-    let v: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("Cannot parse auth.json: {}", e))?;
-
-    let entry = &v["openai-codex"];
-    let access = entry["access"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("No openai-codex.access in auth.json"))?
-        .to_string();
-    let account_id = entry["accountId"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("No openai-codex.accountId in auth.json"))?
-        .to_string();
-    Ok((access, account_id))
-}
+// ── URL helpers ───────────────────────────────────────────────────────────────
 
 fn resolve_codex_url(base_url: &str) -> String {
     let normalized = base_url.trim_end_matches('/');
@@ -332,7 +292,9 @@ fn convert_messages(messages: &[Message]) -> Vec<serde_json::Value> {
             Role::ToolCall => {
                 let call_id = msg.tool_call_id.as_deref().unwrap_or("call_0");
                 let name = msg.tool_name.as_deref().unwrap_or("");
-                let args = msg.tool_args.as_ref()
+                let args = msg
+                    .tool_args
+                    .as_ref()
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "{}".to_string());
                 out.push(serde_json::json!({
@@ -358,12 +320,17 @@ fn convert_messages(messages: &[Message]) -> Vec<serde_json::Value> {
 }
 
 fn convert_tools(tools: &[ToolDefinition]) -> Vec<serde_json::Value> {
-    tools.iter().map(|t| serde_json::json!({
-        "type": "function",
-        "name": t.name,
-        "description": t.description,
-        "parameters": t.parameters,
-    })).collect()
+    tools
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "type": "function",
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            })
+        })
+        .collect()
 }
 
 // ── Pending call accumulator ──────────────────────────────────────────────────

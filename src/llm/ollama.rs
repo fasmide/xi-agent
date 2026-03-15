@@ -21,10 +21,9 @@ impl OllamaProvider {
     /// Build from environment variables, falling back to defaults.
     #[allow(dead_code)]
     pub fn from_env() -> Self {
-        let host = std::env::var("OLLAMA_HOST")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| "llama3.1".to_string());
+        let host =
+            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
+        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.1".to_string());
         Self::new(host, model)
     }
 }
@@ -125,9 +124,10 @@ struct ToolCallFunction {
 /// Returns the value unchanged if it is already an object or array.
 fn coerce_arguments(v: serde_json::Value) -> serde_json::Value {
     if let serde_json::Value::String(s) = &v
-        && let Ok(parsed) = serde_json::from_str(s) {
-            return parsed;
-        }
+        && let Ok(parsed) = serde_json::from_str(s)
+    {
+        return parsed;
+    }
     v
 }
 #[derive(Deserialize)]
@@ -278,7 +278,6 @@ impl LlmProvider for OllamaProvider {
         let url = format!("{}/api/chat", self.base_url);
         let model = self.model.clone();
         let client = self.client.clone();
-        let debug = std::env::var("PIRS_DEBUG").is_ok();
 
         Box::pin(async_stream::stream! {
             let ollama_tools: Vec<OllamaToolDef> = tools
@@ -300,10 +299,9 @@ impl LlmProvider for OllamaProvider {
                 stream: true,
             };
 
-            if debug
-                && let Ok(json) = serde_json::to_string_pretty(&body) {
-                    eprintln!("[PIRS_DEBUG] → request:\n{json}");
-                }
+            if let Ok(json) = serde_json::to_string_pretty(&body) {
+                log::debug!("[PIRS_DEBUG] → request:\n{json}");
+            }
 
             let response = match client
                 .post(&url)
@@ -322,6 +320,8 @@ impl LlmProvider for OllamaProvider {
             if !response.status().is_success() {
                 let status = response.status();
                 let text = response.text().await.unwrap_or_default();
+                let preview: String = text.chars().take(1000).collect();
+                log::warn!("ollama api error: status={} body={}", status, preview);
                 yield LlmEvent::Error(format!("Ollama returned {status}: {text}"));
                 return;
             }
@@ -338,8 +338,8 @@ impl LlmProvider for OllamaProvider {
                 while let Some(pos) = buf.find('\n') {
                     let line = buf[..pos].trim().to_string();
                     buf.drain(..=pos);
-                    if debug && !line.is_empty() {
-                        eprintln!("[PIRS_DEBUG] ← chunk {line_num}: {line}");
+                    if !line.is_empty() {
+                        log::debug!("[PIRS_DEBUG] ← chunk {line_num}: {line}");
                         line_num += 1;
                     }
                     let mut events = Vec::new();

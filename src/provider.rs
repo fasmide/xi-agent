@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
-use crate::llm::{
-    LlmProvider,
-    copilot,
-    openai::OpenAiProvider,
-    codex::CodexProvider,
-    ollama::OllamaProvider,
+use crate::{
+    auth::AuthStore,
+    llm::{
+        LlmProvider,
+        codex::{CodexProvider, DEFAULT_BASE_URL as CODEX_DEFAULT_BASE_URL},
+        copilot,
+        ollama::OllamaProvider,
+        openai::OpenAiProvider,
+    },
 };
 
 /// All supported back-end providers, in display order.
@@ -21,18 +24,18 @@ impl ProviderKind {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Copilot => "copilot",
-            Self::OpenAi  => "openai",
-            Self::Codex   => "codex",
-            Self::Ollama  => "ollama",
+            Self::OpenAi => "openai",
+            Self::Codex => "codex",
+            Self::Ollama => "ollama",
         }
     }
 
     pub fn label(&self) -> &'static str {
         match self {
             Self::Copilot => "GitHub Copilot",
-            Self::OpenAi  => "OpenAI API",
-            Self::Codex   => "OpenAI Codex (chatgpt.com)",
-            Self::Ollama  => "Ollama (local)",
+            Self::OpenAi => "OpenAI API",
+            Self::Codex => "OpenAI Codex (chatgpt.com)",
+            Self::Ollama => "Ollama (local)",
         }
     }
 
@@ -43,10 +46,10 @@ impl ProviderKind {
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "copilot" | "github-copilot" => Some(Self::Copilot),
-            "openai"                     => Some(Self::OpenAi),
-            "codex"                      => Some(Self::Codex),
-            "ollama"                     => Some(Self::Ollama),
-            _                            => None,
+            "openai" => Some(Self::OpenAi),
+            "codex" => Some(Self::Codex),
+            "ollama" => Some(Self::Ollama),
+            _ => None,
         }
     }
 
@@ -54,9 +57,9 @@ impl ProviderKind {
     pub fn default_model(&self) -> &'static str {
         match self {
             Self::Copilot => "gpt-4o",
-            Self::OpenAi  => "gpt-4o",
-            Self::Codex   => "gpt-5.4",
-            Self::Ollama  => "llama3.1",
+            Self::OpenAi => "gpt-4o",
+            Self::Codex => "gpt-5.4",
+            Self::Ollama => "llama3.1",
         }
     }
 }
@@ -67,22 +70,54 @@ pub fn context_window_for_model(model: &str) -> Option<usize> {
     // Normalise to lowercase for matching.
     let m = model.to_ascii_lowercase();
     // Check prefixes / substrings for common model families.
-    if m.starts_with("o3-mini") { return Some(200_000); }
-    if m.starts_with("o3")      { return Some(200_000); }
-    if m.starts_with("o1-mini") { return Some(128_000); }
-    if m.starts_with("o1")      { return Some(200_000); }
-    if m.starts_with("gpt-4o")  { return Some(128_000); }
-    if m.starts_with("gpt-4-turbo") { return Some(128_000); }
-    if m.starts_with("gpt-4")   { return Some(8_192); }
-    if m.starts_with("gpt-3.5-turbo") { return Some(16_385); }
-    if m.starts_with("gpt-5")   { return Some(200_000); }
-    if m.contains("claude-3-5") || m.contains("claude-3.5") { return Some(200_000); }
-    if m.contains("claude-3")   { return Some(200_000); }
-    if m.contains("claude-2")   { return Some(100_000); }
-    if m.contains("llama3")     { return Some(128_000); }
-    if m.contains("llama2")     { return Some(4_096); }
-    if m.contains("mistral")    { return Some(32_000); }
-    if m.contains("gemma")      { return Some(8_192); }
+    if m.starts_with("o3-mini") {
+        return Some(200_000);
+    }
+    if m.starts_with("o3") {
+        return Some(200_000);
+    }
+    if m.starts_with("o1-mini") {
+        return Some(128_000);
+    }
+    if m.starts_with("o1") {
+        return Some(200_000);
+    }
+    if m.starts_with("gpt-4o") {
+        return Some(128_000);
+    }
+    if m.starts_with("gpt-4-turbo") {
+        return Some(128_000);
+    }
+    if m.starts_with("gpt-4") {
+        return Some(8_192);
+    }
+    if m.starts_with("gpt-3.5-turbo") {
+        return Some(16_385);
+    }
+    if m.starts_with("gpt-5") {
+        return Some(200_000);
+    }
+    if m.contains("claude-3-5") || m.contains("claude-3.5") {
+        return Some(200_000);
+    }
+    if m.contains("claude-3") {
+        return Some(200_000);
+    }
+    if m.contains("claude-2") {
+        return Some(100_000);
+    }
+    if m.contains("llama3") {
+        return Some(128_000);
+    }
+    if m.contains("llama2") {
+        return Some(4_096);
+    }
+    if m.contains("mistral") {
+        return Some(32_000);
+    }
+    if m.contains("gemma") {
+        return Some(8_192);
+    }
     None
 }
 
@@ -95,7 +130,12 @@ pub fn build_provider(
 ) -> anyhow::Result<Arc<dyn LlmProvider + Send + Sync>> {
     match kind {
         ProviderKind::Copilot => {
-            let p = copilot::from_env()?.with_model(model);
+            let store = AuthStore::load_default()?;
+            let creds = store.get_copilot().ok_or_else(|| {
+                anyhow::anyhow!("Not authenticated for copilot. Run /login copilot.")
+            })?;
+            let p =
+                copilot::from_access_token(&creds.access_token, model, creds.base_url.as_deref());
             Ok(Arc::new(p))
         }
         ProviderKind::OpenAi => {
@@ -103,7 +143,13 @@ pub fn build_provider(
             Ok(Arc::new(p))
         }
         ProviderKind::Codex => {
-            let p = CodexProvider::from_env()?.with_model(model);
+            let store = AuthStore::load_default()?;
+            let creds = store
+                .get_codex()
+                .ok_or_else(|| anyhow::anyhow!("Not authenticated for codex. Run /login codex."))?;
+            let base_url = std::env::var("CODEX_BASE_URL")
+                .unwrap_or_else(|_| CODEX_DEFAULT_BASE_URL.to_string());
+            let p = CodexProvider::new(base_url, model, creds.access_token, creds.account_id);
             Ok(Arc::new(p))
         }
         ProviderKind::Ollama => {

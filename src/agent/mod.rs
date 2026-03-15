@@ -5,12 +5,12 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::llm::{LlmEvent, LlmProvider, Message, ToolDefinition};
 
+pub mod system_prompt;
 pub mod tools;
 pub mod types;
-pub mod system_prompt;
 
-pub use types::{AgentEvent, AgentLoopConfig, ToolResult};
 pub use system_prompt::build_system_prompt;
+pub use types::{AgentEvent, AgentLoopConfig, ToolResult};
 
 /// Run the agent loop: call the LLM, execute tool calls, repeat until the
 /// model gives a final text answer or `max_turns` is reached.
@@ -53,7 +53,9 @@ pub async fn run_agent_loop(
                 }
                 LlmEvent::ThinkingToken(t) => {
                     let _ = tx.send(AgentEvent::ThinkingToken(t.clone()));
-                    assistant_thinking.get_or_insert_with(String::new).push_str(&t);
+                    assistant_thinking
+                        .get_or_insert_with(String::new)
+                        .push_str(&t);
                 }
                 LlmEvent::ToolCall { id, name, args } => {
                     pending_tool_calls.push((id, name, args));
@@ -85,13 +87,9 @@ pub async fn run_agent_loop(
 
         // ── Execute tool calls sequentially ───────────────────────────────────
         for (id, name, args) in pending_tool_calls {
-            let display_name = config.tools.get(&name)
-                .map(|t| t.label().to_string())
-                .unwrap_or_else(|| name.clone());
-
             let _ = tx.send(AgentEvent::ToolCallStart {
                 id: id.clone(),
-                name: display_name,
+                name: name.clone(),
                 args: args.clone(),
             });
 
@@ -113,9 +111,10 @@ pub async fn run_agent_loop(
 
             // after_tool_call hook
             if let Some(f) = &config.after_tool_call
-                && let Some(override_result) = f(&name, &result) {
-                    result = override_result;
-                }
+                && let Some(override_result) = f(&name, &result)
+            {
+                result = override_result;
+            }
 
             let _ = tx.send(AgentEvent::ToolCallEnd {
                 id: id.clone(),

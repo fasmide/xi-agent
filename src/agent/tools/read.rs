@@ -11,10 +11,6 @@ impl Tool for ReadFileTool {
         "read_file"
     }
 
-    fn label(&self) -> &str {
-        "👀"
-    }
-
     fn description(&self) -> &str {
         "Read the contents of a file at the given path. \
          Optionally specify `offset` (1-indexed line number to start from) \
@@ -52,8 +48,14 @@ impl Tool for ReadFileTool {
                 Some(p) => p.to_string(),
                 None => return ToolResult::err("Missing required parameter: path"),
             };
-            let offset = args.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
-            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let offset = args
+                .get("offset")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
 
             let content = match tokio::fs::read_to_string(&path).await {
                 Ok(c) => c,

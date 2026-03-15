@@ -47,32 +47,26 @@ impl OpenAiProvider {
     /// - `OPENAI_BASE_URL` overrides the preset base URL.
     /// - `OPENAI_MODEL`    overrides the default model (gpt-4o).
     /// - Preset key env var (e.g. `OPENROUTER_API_KEY`) is tried first,
-    ///   then `OPENAI_API_KEY`, then `openai-codex.access` from
-    ///   `~/.pi/agent/auth.json`.
+    ///   then `OPENAI_API_KEY`.
     pub fn from_env() -> anyhow::Result<Self> {
         let preset = std::env::var("PIRS_PRESET").unwrap_or_default();
 
         let (default_base_url, preset_key_var): (&str, &str) = match preset.as_str() {
             "openrouter" => ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-            "groq"       => ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
-            _            => ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+            "groq" => ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+            _ => ("https://api.openai.com/v1", "OPENAI_API_KEY"),
         };
 
         let base_url =
             std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base_url.to_string());
-        let model =
-            std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+        let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
 
-        // API key: preset-specific env var → OPENAI_API_KEY → auth.json
+        // API key: preset-specific env var → OPENAI_API_KEY
         let api_key = std::env::var(preset_key_var)
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .unwrap_or_else(|_| String::new());
-
-        let api_key = if api_key.is_empty() {
-            read_auth_json_token()?
-        } else {
-            api_key
-        };
+            .map_err(|_| {
+                anyhow::anyhow!("Missing API key. Set {} or OPENAI_API_KEY.", preset_key_var)
+            })?;
 
         Ok(Self::new(base_url, model, api_key))
     }
@@ -94,7 +88,6 @@ impl OpenAiProvider {
         let api_key = self.api_key.clone();
         let extra_headers = self.extra_headers.clone();
         let client = self.client.clone();
-        let debug = std::env::var("PIRS_DEBUG").is_ok();
 
         Box::pin(async_stream::stream! {
             let oai_messages: Vec<OaiMessage> = to_oai_messages(&messages);
@@ -110,10 +103,9 @@ impl OpenAiProvider {
                 },
             };
 
-            if debug
-                && let Ok(json) = serde_json::to_string_pretty(&body) {
-                    eprintln!("[PIRS_DEBUG] → request:\n{json}");
-                }
+            if let Ok(json) = serde_json::to_string_pretty(&body) {
+                log::debug!("[PIRS_DEBUG] → request:\n{json}");
+            }
 
             let mut req = client
                 .post(&url)
@@ -137,6 +129,8 @@ impl OpenAiProvider {
             if !response.status().is_success() {
                 let status = response.status();
                 let text = response.text().await.unwrap_or_default();
+                let preview: String = text.chars().take(1000).collect();
+                log::warn!("openai api error: status={} body={}", status, preview);
                 yield LlmEvent::Error(format!("OpenAI returned {status}: {text}"));
                 return;
             }
@@ -192,8 +186,8 @@ impl OpenAiProvider {
                         break 'outer;
                     }
 
-                    if debug && !line.is_empty() {
-                        eprintln!("[PIRS_DEBUG] ← chunk {line_num}: {line}");
+                    if !line.is_empty() {
+                        log::debug!("[PIRS_DEBUG] ← chunk {line_num}: {line}");
                         line_num += 1;
                     }
 
@@ -242,22 +236,6 @@ impl OpenAiProvider {
             }
         })
     }
-}
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-fn read_auth_json_token() -> anyhow::Result<String> {
-    let home = std::env::var("HOME")
-        .map_err(|_| anyhow::anyhow!("$HOME not set"))?;
-    let path = std::path::Path::new(&home).join(".pi/agent/auth.json");
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| anyhow::anyhow!("Cannot read {}: {}", path.display(), e))?;
-    let v: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("Cannot parse auth.json: {}", e))?;
-    v["openai-codex"]["access"]
-        .as_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("No openai-codex.access token in ~/.pi/agent/auth.json"))
 }
 
 // ── Serde types ───────────────────────────────────────────────────────────────
@@ -363,6 +341,17 @@ struct ModelEntry {
 
 // ── Serialisation helpers ─────────────────────────────────────────────────────
 
+fn normalize_tool_name(name: &str) -> String {
+    match name {
+        "👀" => "read_file".to_string(),
+        "✍️" => "write_file".to_string(),
+        "📝" => "edit_file".to_string(),
+        "💻" => "bash".to_string(),
+        "🔍" => "find_files".to_string(),
+        _ => name.to_string(),
+    }
+}
+
 /// Convert a pirs `Message` history to OpenAI Chat Completions messages.
 ///
 /// The OpenAI API requires that tool calls and their accompanying text live in
@@ -397,10 +386,13 @@ fn to_oai_messages(messages: &[Message]) -> Vec<OaiMessage> {
                     let tc = &messages[j];
                     let call_idx = tool_calls.len();
                     tool_calls.push(OaiToolCallItem {
-                        id: tc.tool_call_id.clone().unwrap_or_else(|| format!("call_{call_idx}")),
+                        id: tc
+                            .tool_call_id
+                            .clone()
+                            .unwrap_or_else(|| format!("call_{call_idx}")),
                         r#type: "function",
                         function: OaiToolCallFunction {
-                            name: tc.tool_name.clone().unwrap_or_default(),
+                            name: normalize_tool_name(tc.tool_name.as_deref().unwrap_or_default()),
                             arguments: tc
                                 .tool_args
                                 .as_ref()
@@ -417,8 +409,16 @@ fn to_oai_messages(messages: &[Message]) -> Vec<OaiMessage> {
                     }
                 }
 
-                let content = if msg.content.is_empty() { None } else { Some(msg.content.clone()) };
-                let tool_calls_opt = if tool_calls.is_empty() { None } else { Some(tool_calls) };
+                let content = if msg.content.is_empty() {
+                    None
+                } else {
+                    Some(msg.content.clone())
+                };
+                let tool_calls_opt = if tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(tool_calls)
+                };
 
                 // Skip completely empty assistant messages (no content, no tool calls).
                 if content.is_some() || tool_calls_opt.is_some() {
@@ -457,7 +457,10 @@ fn to_oai_message(msg: &Message) -> OaiMessage {
             role: "assistant",
             content: None,
             tool_calls: Some(vec![OaiToolCallItem {
-                id: msg.tool_call_id.clone().unwrap_or_else(|| "call_0".to_string()),
+                id: msg
+                    .tool_call_id
+                    .clone()
+                    .unwrap_or_else(|| "call_0".to_string()),
                 r#type: "function",
                 function: OaiToolCallFunction {
                     name: msg.tool_name.clone().unwrap_or_default(),

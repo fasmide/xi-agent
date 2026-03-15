@@ -25,9 +25,9 @@ cargo build --release
 
 | Provider         | Key / credential                                      | Env var override     |
 |------------------|-------------------------------------------------------|----------------------|
-| `copilot`        | `~/.pi/agent/auth.json` (`github-copilot.access`)    | —                    |
+| `copilot`        | pirs auth store (`auth.json` in platform config dir) | —                    |
 | `openai`         | `OPENAI_API_KEY`                                      | `OPENAI_MODEL`       |
-| `codex`          | `~/.pi/agent/auth.json` (`chatgpt.com` session)       | `OPENAI_MODEL`       |
+| `codex`          | pirs auth store (`auth.json` in platform config dir) | `OPENAI_MODEL`       |
 | `ollama`         | none (local)                                          | `OLLAMA_BASE_URL`, `OPENAI_MODEL` |
 
 The default provider is `copilot`. Override at startup:
@@ -78,6 +78,8 @@ pirs -P ollama -m llama3.2
 | `/model <name>`      | Switch to a named model                          |
 | `/provider`          | Open interactive provider picker                 |
 | `/provider <name>`   | Switch provider (copilot / openai / codex / ollama) |
+| `/login`             | Open interactive auth provider picker (copilot / codex) |
+| `/login <provider>`  | Authenticate provider                            |
 | `/quit`              | Quit                                             |
 
 ## Built-in tools

@@ -2,11 +2,16 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::{app::{App, MAX_SELECTION_VISIBLE}, commands::CompletionItem, llm::Role, provider::context_window_for_model};
+use crate::{
+    app::{App, MAX_SELECTION_VISIBLE},
+    commands::CompletionItem,
+    llm::Role,
+    provider::context_window_for_model,
+};
 
 /// Background colour of the input panel.
 const INPUT_BG: Color = Color::Rgb(30, 30, 40);
@@ -37,7 +42,6 @@ const SELECTION_SEL_BG: Color = Color::Rgb(30, 90, 30);
 
 /// Foreground colour for model names in the selection menu.
 const SELECTION_ITEM_FG: Color = Color::Rgb(140, 220, 140);
-
 
 /// The textarea itself is owned by `App` with no styling baked in;
 /// all rendering concerns live here.
@@ -103,29 +107,29 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),                        // 0: chat log
-            Constraint::Length(completion_height),     // 1: completion popup
+            Constraint::Min(1),                          // 0: chat log
+            Constraint::Length(completion_height),       // 1: completion popup
             Constraint::Length(selection_header_height), // 2: selection header
             Constraint::Length(selection_items_height),  // 3: selection items
-            Constraint::Length(1),                     // 4: ▄ top edge of input panel
-            Constraint::Length(input_height),          // 5: input textarea
-            Constraint::Length(1),                     // 6: ▀ bottom edge of input panel
-            Constraint::Length(info_height),           // 7: info bar (optional)
+            Constraint::Length(1),                       // 4: ▄ top edge of input panel
+            Constraint::Length(input_height),            // 5: input textarea
+            Constraint::Length(1),                       // 6: ▀ bottom edge of input panel
+            Constraint::Length(info_height),             // 7: info bar (optional)
         ])
         .split(f.area());
 
-    let log_area           = chunks[0];
-    let completion_area    = chunks[1];
-    let sel_header_area    = chunks[2];
-    let sel_items_area     = chunks[3];
-    let top_hb_area        = chunks[4];
-    let input_area         = chunks[5];
-    let bot_hb_area        = chunks[6];
-    let info_area          = chunks[7];
+    let log_area = chunks[0];
+    let completion_area = chunks[1];
+    let sel_header_area = chunks[2];
+    let sel_items_area = chunks[3];
+    let top_hb_area = chunks[4];
+    let input_area = chunks[5];
+    let bot_hb_area = chunks[6];
+    let info_area = chunks[7];
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
-    let pane_width   = log_area.width as usize;
+    let pane_width = log_area.width as usize;
 
     // Pre-wrapped lines: each Line is exactly one visual row.
     let mut lines = build_log_lines(&app.messages, app.streaming, pane_width);
@@ -142,7 +146,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     let total_lines = lines.len();
-    let max_scroll  = total_lines.saturating_sub(inner_height);
+    let max_scroll = total_lines.saturating_sub(inner_height);
 
     if app.auto_scroll {
         app.log_scroll = max_scroll;
@@ -160,8 +164,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(log_paragraph, log_area);
 
     if total_lines > inner_height {
-        let mut scrollbar_state =
-            ScrollbarState::new(max_scroll + 1).position(app.log_scroll);
+        let mut scrollbar_state = ScrollbarState::new(max_scroll + 1).position(app.log_scroll);
         f.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             log_area,
@@ -171,11 +174,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     // ── Completion popup ──────────────────────────────────────────────────────
     if completion_height > 0 {
-        let popup_lines = build_completion_lines(
-            &app.completions,
-            app.completion_selected,
-            width,
-        );
+        let popup_lines = build_completion_lines(&app.completions, app.completion_selected, width);
         f.render_widget(Paragraph::new(popup_lines), completion_area);
     }
 
@@ -184,8 +183,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         // Header row: title on the left, key hints on the right.
         const HINTS: &str = "↑↓ navigate   Enter select   Esc cancel  ";
         let title = app.selection_title;
-        let gap = width
-            .saturating_sub(title.width() + HINTS.width());
+        let gap = width.saturating_sub(title.width() + HINTS.width());
         let header_line = Line::from(vec![
             Span::styled(
                 title,
@@ -194,10 +192,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     .bg(SELECTION_HEADER_BG)
                     .add_modifier(ratatui::style::Modifier::BOLD),
             ),
-            Span::styled(
-                " ".repeat(gap),
-                Style::default().bg(SELECTION_HEADER_BG),
-            ),
+            Span::styled(" ".repeat(gap), Style::default().bg(SELECTION_HEADER_BG)),
             Span::styled(
                 HINTS,
                 Style::default().fg(Color::DarkGray).bg(SELECTION_HEADER_BG),
@@ -247,15 +242,53 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     if app.show_info {
         let ctx_str = match context_window_for_model(&app.current_model) {
             Some(n) => format_context_size(n),
-            None    => "unknown".to_string(),
+            None => "unknown".to_string(),
         };
-        let info_line = build_info_line(
-            &app.current_provider,
-            &app.current_model,
-            &ctx_str,
-            width,
-        );
+        let info_line = build_info_line(&app.current_provider, &app.current_model, &ctx_str, width);
         f.render_widget(Paragraph::new(vec![info_line]), info_area);
+    }
+
+    if app.login_active {
+        let w = f.area().width.saturating_sub(8).min(90);
+        let h: u16 = 8;
+        let x = (f.area().width.saturating_sub(w)) / 2;
+        let y = (f.area().height.saturating_sub(h)) / 2;
+        let area = ratatui::layout::Rect::new(x, y, w, h);
+
+        let mut lines: Vec<Line<'static>> = vec![];
+        let provider = app
+            .login_provider
+            .clone()
+            .unwrap_or_else(|| "provider".to_string());
+        lines.push(Line::from(Span::styled(
+            format!("Login: {provider}"),
+            Style::default().fg(Color::White),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(app.login_info.clone()));
+        if let Some(url) = &app.login_url {
+            lines.push(Line::from(""));
+            lines.push(Line::from(format!("URL: {url}")));
+        }
+        if let Some(code) = &app.login_code {
+            lines.push(Line::from(format!("Code: {code}")));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Press Esc to cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        f.render_widget(Clear, area);
+        f.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Authentication ")
+                    .style(Style::default().bg(Color::Rgb(18, 18, 30))),
+            ),
+            area,
+        );
     }
 }
 
@@ -286,11 +319,16 @@ fn build_completion_lines(
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            let bg = if i == selected { COMPLETION_SEL_BG } else { COMPLETION_BG };
+            let bg = if i == selected {
+                COMPLETION_SEL_BG
+            } else {
+                COMPLETION_BG
+            };
 
             if item.loading {
                 // Non-interactive loading indicator — dim, full-width fill.
-                let fill = " ".repeat(terminal_width.saturating_sub(INDENT.len() + item.label.len()));
+                let fill =
+                    " ".repeat(terminal_width.saturating_sub(INDENT.len() + item.label.len()));
                 return Line::from(vec![
                     Span::styled(INDENT, Style::default().bg(bg)),
                     Span::styled(
@@ -307,7 +345,11 @@ fn build_completion_lines(
             let label_padded = format!("{:<width$}", item.label, width = label_col);
             let used = INDENT.len()
                 + label_col
-                + if item.detail.is_empty() { 0 } else { SEP.len() + item.detail.len() };
+                + if item.detail.is_empty() {
+                    0
+                } else {
+                    SEP.len() + item.detail.len()
+                };
             let fill = " ".repeat(terminal_width.saturating_sub(used));
 
             if item.detail.is_empty() {
@@ -321,7 +363,10 @@ fn build_completion_lines(
                     Span::styled(INDENT, Style::default().bg(bg)),
                     Span::styled(label_padded, Style::default().fg(COMPLETION_CMD_FG).bg(bg)),
                     Span::styled(SEP, Style::default().fg(Color::DarkGray).bg(bg)),
-                    Span::styled(item.detail.clone(), Style::default().fg(COMPLETION_DESC_FG).bg(bg)),
+                    Span::styled(
+                        item.detail.clone(),
+                        Style::default().fg(COMPLETION_DESC_FG).bg(bg),
+                    ),
                     Span::styled(fill, Style::default().bg(bg)),
                 ])
             }
@@ -347,12 +392,15 @@ fn build_selection_lines(
         .take(MAX_SELECTION_VISIBLE)
         .map(|(i, item)| {
             let is_sel = i == selected;
-            let bg = if is_sel { SELECTION_SEL_BG } else { SELECTION_BG };
+            let bg = if is_sel {
+                SELECTION_SEL_BG
+            } else {
+                SELECTION_BG
+            };
 
             if item.loading {
-                let fill = " ".repeat(
-                    terminal_width.saturating_sub(INDENT.len() + item.label.width()),
-                );
+                let fill =
+                    " ".repeat(terminal_width.saturating_sub(INDENT.len() + item.label.width()));
                 return Line::from(vec![
                     Span::styled(INDENT, Style::default().bg(bg)),
                     Span::styled(
@@ -372,18 +420,16 @@ fn build_selection_lines(
             let fill = " ".repeat(terminal_width.saturating_sub(used));
             Line::from(vec![
                 Span::styled(INDENT, Style::default().bg(bg)),
+                Span::styled(prefix, Style::default().fg(Color::White).bg(bg)),
                 Span::styled(
-                    prefix,
-                    Style::default().fg(Color::White).bg(bg),
+                    item.label.clone(),
+                    Style::default().fg(SELECTION_ITEM_FG).bg(bg),
                 ),
-                Span::styled(item.label.clone(), Style::default().fg(SELECTION_ITEM_FG).bg(bg)),
                 Span::styled(fill, Style::default().bg(bg)),
             ])
         })
         .collect()
 }
-
-
 
 /// Build all visual lines for the chat log, pre-wrapped to `width` columns.
 /// Each returned `Line` occupies exactly one terminal row.
@@ -404,7 +450,8 @@ fn build_log_lines(
             Role::System => {
                 // System messages are not displayed in the chat log.
             }
-            Role::Assistant => {                let thinking = msg.thinking.as_deref().unwrap_or("");
+            Role::Assistant => {
+                let thinking = msg.thinking.as_deref().unwrap_or("");
                 let is_streaming_last = streaming && is_last;
 
                 // Render thinking block (if any thinking content has arrived).
@@ -422,7 +469,11 @@ fn build_log_lines(
                 } else {
                     msg.content.clone()
                 };
-                let suffix = if is_streaming_last && !msg.content.is_empty() { "▋" } else { "" };
+                let suffix = if is_streaming_last && !msg.content.is_empty() {
+                    "▋"
+                } else {
+                    ""
+                };
                 append_message(&mut lines, &content, suffix, width, false);
             }
             Role::ToolCall => {
@@ -432,7 +483,11 @@ fn build_log_lines(
                     .as_ref()
                     .map(|a| {
                         let s = a.to_string();
-                        if s.len() > 60 { format!("{}…", &s[..60]) } else { s }
+                        if s.len() > 60 {
+                            format!("{}…", &s[..60])
+                        } else {
+                            s
+                        }
                     })
                     .unwrap_or_default();
                 let label = format!("⚙ {name}({args_preview})");
@@ -441,8 +496,16 @@ fn build_log_lines(
             Role::ToolResult => {
                 let preview: String = msg.content.chars().take(200).collect();
                 let truncated = msg.content.len() > 200;
-                let display = if truncated { format!("{preview}…") } else { preview };
-                let color = if msg.is_error { Color::Red } else { Color::Green };
+                let display = if truncated {
+                    format!("{preview}…")
+                } else {
+                    preview
+                };
+                let color = if msg.is_error {
+                    Color::Red
+                } else {
+                    Color::Green
+                };
                 let label = format!("↳ {display}");
                 append_message_colored(&mut lines, &label, width, color);
             }
@@ -454,12 +517,7 @@ fn build_log_lines(
 
 /// Append pre-wrapped colored lines for a single-line tool label.
 /// Wraps if the label is wider than `width`, renders in the given `color`.
-fn append_message_colored(
-    out: &mut Vec<Line<'static>>,
-    content: &str,
-    width: usize,
-    color: Color,
-) {
+fn append_message_colored(out: &mut Vec<Line<'static>>, content: &str, width: usize, color: Color) {
     let style = Style::default().fg(color);
     let chunks = wrap_str(content, width);
     for chunk in chunks {
@@ -494,8 +552,7 @@ fn append_message_dim(
             let is_last_chunk = chunk_idx == last_chunk;
             let show_suffix = !suffix.is_empty() && is_last_seg && is_last_chunk;
 
-            let mut spans: Vec<Span<'static>> =
-                vec![Span::styled(chunk.clone(), dim_style)];
+            let mut spans: Vec<Span<'static>> = vec![Span::styled(chunk.clone(), dim_style)];
             if show_suffix {
                 spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
             }
@@ -584,15 +641,10 @@ fn wrap_str(text: &str, width: usize) -> Vec<String> {
 const INFO_BG: Color = Color::Rgb(20, 20, 30);
 
 /// Build the single info-bar `Line` showing provider / model / context window.
-fn build_info_line<'a>(
-    provider: &str,
-    model: &str,
-    ctx: &str,
-    width: usize,
-) -> Line<'a> {
-    let sep_style  = Style::default().fg(Color::Rgb(60, 60, 80)).bg(INFO_BG);
-    let key_style  = Style::default().fg(Color::Rgb(100, 100, 130)).bg(INFO_BG);
-    let val_style  = Style::default().fg(Color::Rgb(180, 200, 255)).bg(INFO_BG);
+fn build_info_line<'a>(provider: &str, model: &str, ctx: &str, width: usize) -> Line<'a> {
+    let sep_style = Style::default().fg(Color::Rgb(60, 60, 80)).bg(INFO_BG);
+    let key_style = Style::default().fg(Color::Rgb(100, 100, 130)).bg(INFO_BG);
+    let val_style = Style::default().fg(Color::Rgb(180, 200, 255)).bg(INFO_BG);
     let fill_style = Style::default().bg(INFO_BG);
     let hint_style = Style::default().fg(Color::Rgb(60, 60, 80)).bg(INFO_BG);
 

@@ -14,10 +14,6 @@ impl Tool for BashTool {
         "bash"
     }
 
-    fn label(&self) -> &str {
-        "💻"
-    }
-
     fn description(&self) -> &str {
         "Run a shell command via `/bin/sh -c` and return its stdout, stderr, \
          and exit code. Both stdout and stderr are truncated to 8 KiB each. \

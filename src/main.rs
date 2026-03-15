@@ -6,24 +6,26 @@ use crossterm::{
         PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures_util::StreamExt;
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{io, sync::Arc};
 
-mod app;
-mod commands;
 mod agent;
+mod app;
+mod auth;
+mod commands;
+mod debug_log;
 mod llm;
 mod provider;
 mod ui;
 
+use agent::{AgentEvent, AgentLoopConfig, build_system_prompt, tools::register_builtin_tools};
 use app::{App, SelectionResult};
-use agent::{build_system_prompt, tools::register_builtin_tools, AgentLoopConfig, AgentEvent};
 use commands::CommandAction;
-use llm::{LlmProvider, Message};
-use provider::{build_provider, ProviderKind};
+use llm::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture};
+use provider::{ProviderKind, build_provider};
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
@@ -51,6 +53,8 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    debug_log::init_logging();
+
     let cli = Cli::parse();
 
     // ── Non-interactive (--print / -p) mode ───────────────────────────────────
@@ -61,7 +65,8 @@ async fn main() -> io::Result<()> {
 
     // Determine the initial provider.
     // Priority: --provider flag > PIRS_PROVIDER env var > Copilot default.
-    let mut current_kind = cli.provider
+    let mut current_kind = cli
+        .provider
         .as_deref()
         .and_then(ProviderKind::from_name)
         .or_else(|| {
@@ -72,7 +77,8 @@ async fn main() -> io::Result<()> {
         .unwrap_or(ProviderKind::Copilot);
 
     // Priority: --model flag > COPILOT_MODEL / OPENAI_MODEL env vars > provider default.
-    let mut current_model = cli.model
+    let mut current_model = cli
+        .model
         .clone()
         .or_else(|| std::env::var("COPILOT_MODEL").ok())
         .or_else(|| std::env::var("OPENAI_MODEL").ok())
@@ -95,12 +101,16 @@ async fn main() -> io::Result<()> {
         .unwrap_or_else(|_| ".".to_string());
     let system_prompt = build_system_prompt(&tools, &cwd);
 
-    let mut app = App::new(&current_model, &current_kind, AgentLoopConfig {
-        tools,
-        before_tool_call: None,
-        after_tool_call: None,
-        max_turns: 20,
-    });
+    let mut app = App::new(
+        &current_model,
+        &current_kind,
+        AgentLoopConfig {
+            tools,
+            before_tool_call: None,
+            after_tool_call: None,
+            max_turns: 20,
+        },
+    );
     app.system_prompt = Some(system_prompt);
 
     loop {
@@ -108,25 +118,27 @@ async fn main() -> io::Result<()> {
         let provider = match build_provider(&current_kind, &current_model) {
             Ok(p) => p,
             Err(e) => {
-                // If the chosen provider can't initialise, fall back to Copilot
-                // and inform the user via a system message in the chat log.
-                app.messages.push(llm::Message::assistant(
-                    format!("[provider error: {e} — falling back to copilot]")
-                ));
-                current_kind = ProviderKind::Copilot;
-                current_model = current_kind.default_model().to_string();
-                match build_provider(&current_kind, &current_model) {
-                    Ok(p) => p,
-                    Err(e2) => {
-                        eprintln!("pirs: cannot initialise any provider: {e2}");
-                        break;
-                    }
-                }
+                let msg = format!("[provider unavailable: {e}]");
+                log::debug!(
+                    "provider build failed: provider={} model={} err={}",
+                    current_kind.name(),
+                    current_model,
+                    e
+                );
+                app.messages.push(llm::Message::assistant(msg.clone()));
+                Arc::new(UnavailableProvider { message: msg }) as Arc<dyn LlmProvider + Send + Sync>
             }
         };
 
+        if app.retry_after_refresh {
+            app.retry_after_refresh = false;
+            app.retry_last_request(&provider);
+        }
+
         match run(&mut terminal, &mut app, &provider).await {
             Ok(RunResult::Quit) | Err(_) => break,
+
+            Ok(RunResult::RebuildProvider) => {}
 
             Ok(RunResult::ChangeModel(name)) => {
                 app.current_model = name.clone();
@@ -165,8 +177,34 @@ async fn main() -> io::Result<()> {
 
 enum RunResult {
     Quit,
+    RebuildProvider,
     ChangeModel(String),
     ChangeProvider(String),
+}
+
+struct UnavailableProvider {
+    message: String,
+}
+
+impl LlmProvider for UnavailableProvider {
+    fn stream_chat(&self, _messages: Vec<Message>) -> LlmStream {
+        let msg = self.message.clone();
+        Box::pin(async_stream::stream! {
+            yield LlmEvent::Error(msg);
+        })
+    }
+
+    fn stream_chat_with_tools(
+        &self,
+        _messages: Vec<Message>,
+        _tools: Vec<llm::ToolDefinition>,
+    ) -> LlmStream {
+        self.stream_chat(vec![])
+    }
+
+    fn list_models(&self) -> ModelListFuture {
+        Box::pin(async { vec![] })
+    }
 }
 
 // ── Inner event loop ──────────────────────────────────────────────────────────
@@ -212,6 +250,9 @@ async fn run(
                                         Some(SelectionResult::Provider(p)) => {
                                             return Ok(RunResult::ChangeProvider(p));
                                         }
+                                        Some(SelectionResult::LoginProvider(p)) => {
+                                            app.start_login(&p);
+                                        }
                                         None => {}
                                     }
                                 }
@@ -222,11 +263,17 @@ async fn run(
                         }
 
                         if key.code == KeyCode::Esc {
-                            if app.in_slash_mode() {
+                            if app.login_active {
+                                app.cancel_login();
+                            } else if app.in_slash_mode() {
                                 app.reset_textarea();
                             } else {
                                 return Ok(RunResult::Quit);
                             }
+                            continue;
+                        }
+
+                        if app.login_active {
                             continue;
                         }
 
@@ -285,6 +332,12 @@ async fn run(
                                         Some(CommandAction::ProviderNoArg) => {
                                             app.enter_provider_selection_mode();
                                         }
+                                        Some(CommandAction::Login(provider)) => {
+                                            app.start_login(&provider);
+                                        }
+                                        Some(CommandAction::LoginNoArg) => {
+                                            app.enter_login_selection_mode();
+                                        }
                                         None => {}
                                     }
                                 } else {
@@ -324,6 +377,15 @@ async fn run(
             Some(models) = app.models_rx.recv() => {
                 app.apply_model_list(models);
             }
+
+            // ── Login flow events ─────────────────────────────────────────────
+            Some(ev) = app.login_rx.recv() => {
+                app.apply_login_event(ev);
+                if app.login_needs_rebuild {
+                    app.login_needs_rebuild = false;
+                    return Ok(RunResult::RebuildProvider);
+                }
+            }
         }
     }
 }
@@ -352,9 +414,8 @@ async fn run_print_mode(
         .or_else(|| std::env::var("OPENAI_MODEL").ok())
         .unwrap_or_else(|| current_kind.default_model().to_string());
 
-    let provider = build_provider(&current_kind, &current_model).map_err(|e| {
-        io::Error::other(format!("provider error: {e}"))
-    })?;
+    let provider = build_provider(&current_kind, &current_model)
+        .map_err(|e| io::Error::other(format!("provider error: {e}")))?;
 
     let tools = register_builtin_tools();
     let cwd = std::env::current_dir()
@@ -362,10 +423,7 @@ async fn run_print_mode(
         .unwrap_or_else(|_| ".".to_string());
     let system_prompt = build_system_prompt(&tools, &cwd);
 
-    let messages: Vec<Message> = vec![
-        Message::system(&system_prompt),
-        Message::user(&prompt),
-    ];
+    let messages: Vec<Message> = vec![Message::system(&system_prompt), Message::user(&prompt)];
 
     let config = AgentLoopConfig {
         tools,
@@ -396,7 +454,9 @@ async fn run_print_mode(
                 let detail = tool_call_summary(&args);
                 eprintln!("{name} {detail}");
             }
-            AgentEvent::ToolCallEnd { name: _, result, .. } => {
+            AgentEvent::ToolCallEnd {
+                name: _, result, ..
+            } => {
                 if result.is_error {
                     eprintln!("  ✗ {}", result.content.lines().next().unwrap_or("error"));
                 }

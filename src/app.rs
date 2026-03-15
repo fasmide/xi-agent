@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use tui_textarea::{CursorMove, TextArea};
 
 use crate::{
-    agent::{run_agent_loop, types::AgentEvent, AgentLoopConfig},
+    agent::{AgentLoopConfig, run_agent_loop, types::AgentEvent},
+    auth::{self, LoginEvent},
     commands::{self, CompletionItem},
-    llm::{Message, Role, LlmProvider},
+    llm::{LlmProvider, Message, Role},
     provider::ProviderKind,
 };
 
@@ -14,6 +18,7 @@ use crate::{
 pub enum SelectionResult {
     Model(String),
     Provider(String),
+    LoginProvider(String),
 }
 
 /// Maximum number of rows shown in the selection menu before scrolling.
@@ -68,6 +73,18 @@ pub struct App {
     /// below the input panel.  Toggled by Ctrl+I.
     pub show_info: bool,
 
+    // ── Login overlay ─────────────────────────────────────────────────────────
+    pub login_active: bool,
+    pub login_provider: Option<String>,
+    pub login_info: String,
+    pub login_url: Option<String>,
+    pub login_code: Option<String>,
+    pub login_needs_rebuild: bool,
+    pub refresh_in_progress: bool,
+    pub retry_after_refresh: bool,
+    auth_retry_budget: u8,
+    login_cancel: Option<Arc<AtomicBool>>,
+
     // ── Async channels ────────────────────────────────────────────────────────
     /// Receives AgentEvents forwarded from the active agent loop task.
     pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
@@ -75,6 +92,9 @@ pub struct App {
     /// Receives model lists forwarded from `list_models` tasks.
     pub(crate) models_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<String>>,
     models_tx: tokio::sync::mpsc::UnboundedSender<Vec<String>>,
+    /// Receives login status events from background auth tasks.
+    pub(crate) login_rx: tokio::sync::mpsc::UnboundedReceiver<LoginEvent>,
+    login_tx: tokio::sync::mpsc::UnboundedSender<LoginEvent>,
 }
 
 // Convenience alias used throughout this module.
@@ -88,6 +108,7 @@ impl App {
     ) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (models_tx, models_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (login_tx, login_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             messages: Vec::new(),
             textarea: Self::make_textarea(),
@@ -109,10 +130,22 @@ impl App {
             selection_selected: 0,
             selection_scroll: 0,
             show_info: false,
+            login_active: false,
+            login_provider: None,
+            login_info: String::new(),
+            login_url: None,
+            login_code: None,
+            login_needs_rebuild: false,
+            refresh_in_progress: false,
+            retry_after_refresh: false,
+            auth_retry_budget: 0,
+            login_cancel: None,
             event_rx,
             event_tx,
             models_rx,
             models_tx,
+            login_rx,
+            login_tx,
         }
     }
 
@@ -187,17 +220,19 @@ impl App {
         self.update_completions();
         // Populate (or refresh) the selection menu if it is currently showing models.
         if self.selection_mode
-            && let Some(ref all) = self.available_models.clone() {
-                let items: Vec<_> = all.iter()
-                    .map(|m| commands::CompletionItem::from_model(m))
-                    .collect();
-                if items.iter().any(|i| !i.loading) {
-                    self.selection_items = items;
-                    if self.selection_selected >= self.selection_items.len() {
-                        self.selection_selected = 0;
-                    }
+            && let Some(ref all) = self.available_models.clone()
+        {
+            let items: Vec<_> = all
+                .iter()
+                .map(|m| commands::CompletionItem::from_model(m))
+                .collect();
+            if items.iter().any(|i| !i.loading) {
+                self.selection_items = items;
+                if self.selection_selected >= self.selection_items.len() {
+                    self.selection_selected = 0;
                 }
             }
+        }
     }
 
     /// Navigate the completion selection down (wraps around).
@@ -240,7 +275,10 @@ impl App {
         self.selection_selected = 0;
         self.selection_scroll = 0;
         self.selection_items = if let Some(models) = &self.available_models {
-            models.iter().map(|m| CompletionItem::from_model(m)).collect()
+            models
+                .iter()
+                .map(|m| CompletionItem::from_model(m))
+                .collect()
         } else {
             vec![CompletionItem::loading_indicator()]
         };
@@ -256,6 +294,24 @@ impl App {
         self.selection_items = ProviderKind::all()
             .iter()
             .map(|p| CompletionItem::from_provider(p.name(), p.label()))
+            .collect();
+    }
+
+    /// Open provider picker for `/login` command.
+    pub fn enter_login_selection_mode(&mut self) {
+        self.reset_textarea();
+        self.selection_mode = true;
+        self.selection_title = "  Login provider  ";
+        self.selection_selected = 0;
+        self.selection_scroll = 0;
+        self.selection_items = ["copilot", "codex"]
+            .iter()
+            .map(|p| CompletionItem {
+                label: (*p).to_string(),
+                detail: String::new(),
+                complete_to: format!("/login {p}"),
+                loading: false,
+            })
             .collect();
     }
 
@@ -320,11 +376,99 @@ impl App {
             SelectionResult::Provider(name.to_string())
         } else if let Some(name) = item.complete_to.strip_prefix("/model ") {
             SelectionResult::Model(name.to_string())
+        } else if let Some(name) = item.complete_to.strip_prefix("/login ") {
+            SelectionResult::LoginProvider(name.to_string())
         } else {
             return None;
         };
         self.exit_selection_mode();
         Some(result)
+    }
+
+    pub fn start_login(&mut self, provider: &str) {
+        if self.login_active {
+            return;
+        }
+
+        log::debug!("login start requested: provider={provider}");
+
+        self.login_active = true;
+        self.login_provider = Some(provider.to_string());
+        self.login_info = format!("Starting login for {provider}...");
+        self.login_url = None;
+        self.login_code = None;
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.login_cancel = Some(cancel.clone());
+        let tx = self.login_tx.clone();
+        let provider = provider.to_string();
+
+        tokio::spawn(async move {
+            auth::login_provider(&provider, tx, cancel).await;
+        });
+    }
+
+    pub fn cancel_login(&mut self) {
+        if let Some(cancel) = &self.login_cancel {
+            log::debug!("login cancel requested");
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub fn apply_login_event(&mut self, ev: LoginEvent) {
+        match ev {
+            LoginEvent::Info(msg) => {
+                log::debug!("login info: {msg}");
+                self.login_info = msg;
+            }
+            LoginEvent::AuthCode { url, code } => {
+                log::debug!("login auth prompt: url={} has_code={}", url, code.is_some());
+                self.login_url = Some(url);
+                self.login_code = code;
+            }
+            LoginEvent::Success { provider } => {
+                log::debug!("login success: provider={provider}");
+                self.messages.push(Message::assistant(format!(
+                    "[login successful: {provider}]"
+                )));
+                self.login_needs_rebuild = true;
+            }
+            LoginEvent::Error { provider, message } => {
+                log::debug!("login error: provider={} err={}", provider, message);
+                self.messages.push(Message::assistant(format!(
+                    "[login failed for {provider}: {message}]"
+                )));
+            }
+            LoginEvent::RefreshResult {
+                provider,
+                success,
+                message,
+            } => {
+                log::debug!(
+                    "token refresh result: provider={} success={} msg={}",
+                    provider,
+                    success,
+                    message
+                );
+                self.refresh_in_progress = false;
+                if success {
+                    self.messages
+                        .push(Message::assistant(format!("[token refreshed: {provider}]")));
+                    self.login_needs_rebuild = true;
+                } else {
+                    self.retry_after_refresh = false;
+                    self.messages.push(Message::assistant(format!(
+                        "[token refresh failed for {provider}: {message}. Run /login {provider}]"
+                    )));
+                }
+            }
+            LoginEvent::Finished => {
+                log::debug!("login flow finished");
+                self.login_active = false;
+                self.login_provider = None;
+                self.login_cancel = None;
+            }
+        }
     }
 
     // ── Conversation management ───────────────────────────────────────────────
@@ -343,7 +487,7 @@ impl App {
         let lines: Vec<String> = self.textarea.lines().to_vec();
         let text = lines.join("\n");
         let trimmed = text.trim().to_string();
-        if trimmed.is_empty() || self.streaming {
+        if trimmed.is_empty() || self.streaming || self.login_active {
             return;
         }
 
@@ -351,6 +495,7 @@ impl App {
         self.reset_textarea();
         self.auto_scroll = true;
         self.streaming = true;
+        self.auth_retry_budget = 1;
 
         let mut llm_messages: Vec<Message> = self
             .system_prompt
@@ -360,10 +505,49 @@ impl App {
             .collect();
 
         if matches!(llm_messages.last().map(|m| &m.role), Some(Role::Assistant))
-            && llm_messages.last().map(|m| m.content.is_empty()).unwrap_or(false)
+            && llm_messages
+                .last()
+                .map(|m| m.content.is_empty())
+                .unwrap_or(false)
         {
             llm_messages.pop();
         }
+
+        let config = AgentLoopConfig {
+            tools: self.agent_config.tools.clone(),
+            before_tool_call: None,
+            after_tool_call: None,
+            max_turns: self.agent_config.max_turns,
+        };
+
+        let provider = Arc::clone(provider);
+        let tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            run_agent_loop(llm_messages, config, provider, tx).await;
+        });
+    }
+
+    pub fn retry_last_request(&mut self, provider: &DynProvider) {
+        if self.streaming || self.login_active {
+            return;
+        }
+
+        if let Some(last) = self.messages.last()
+            && last.role == Role::Assistant
+            && last.content.starts_with("[Error:")
+        {
+            self.messages.pop();
+        }
+
+        self.streaming = true;
+        self.auto_scroll = true;
+
+        let llm_messages: Vec<Message> = self
+            .system_prompt
+            .iter()
+            .map(Message::system)
+            .chain(self.messages.iter().cloned())
+            .collect();
 
         let config = AgentLoopConfig {
             tools: self.agent_config.tools.clone(),
@@ -405,7 +589,9 @@ impl App {
             AgentEvent::ThinkingToken(token) => {
                 self.ensure_assistant_message();
                 if let Some(last) = self.messages.last_mut() {
-                    last.thinking.get_or_insert_with(String::new).push_str(&token);
+                    last.thinking
+                        .get_or_insert_with(String::new)
+                        .push_str(&token);
                 }
             }
             AgentEvent::TextToken(token) => {
@@ -417,16 +603,42 @@ impl App {
             AgentEvent::ToolCallStart { id, name, args } => {
                 self.messages.push(Message::tool_call(id, name, args));
             }
-            AgentEvent::ToolCallEnd { id, name: _name, result } => {
-                self.messages.push(Message::tool_result(&id, result.content, result.is_error));
+            AgentEvent::ToolCallEnd {
+                id,
+                name: _name,
+                result,
+            } => {
+                self.messages
+                    .push(Message::tool_result(&id, result.content, result.is_error));
             }
             AgentEvent::TurnEnd => {}
             AgentEvent::Done => {
                 self.streaming = false;
             }
             AgentEvent::Error(e) => {
-                self.messages.push(Message::assistant(format!("[Error: {e}]")));
-                self.streaming = false;
+                let is_auth_401 = e.contains(" 401")
+                    && (self.current_provider == "copilot" || self.current_provider == "codex");
+
+                if is_auth_401 && self.auth_retry_budget > 0 && !self.refresh_in_progress {
+                    log::debug!(
+                        "received 401, attempting token refresh: provider={} remaining_budget={}",
+                        self.current_provider,
+                        self.auth_retry_budget
+                    );
+                    self.auth_retry_budget -= 1;
+                    self.refresh_in_progress = true;
+                    self.retry_after_refresh = true;
+                    self.streaming = false;
+                    let provider = self.current_provider.clone();
+                    let tx = self.login_tx.clone();
+                    tokio::spawn(async move {
+                        auth::refresh_provider(&provider, tx).await;
+                    });
+                } else {
+                    self.messages
+                        .push(Message::assistant(format!("[Error: {e}]")));
+                    self.streaming = false;
+                }
             }
         }
     }

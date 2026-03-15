@@ -11,10 +11,6 @@ impl Tool for EditTool {
         "edit_file"
     }
 
-    fn label(&self) -> &str {
-        "📝"
-    }
-
     fn description(&self) -> &str {
         "Edit a file by replacing an exact text occurrence with new text. \
          `old_text` must match exactly (including whitespace and newlines) and \

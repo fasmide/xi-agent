@@ -15,10 +15,6 @@ impl Tool for FindTool {
         "find_files"
     }
 
-    fn label(&self) -> &str {
-        "🔍"
-    }
-
     fn description(&self) -> &str {
         "Search for files matching a glob pattern. Returns file paths relative \
          to the search directory, one per line, sorted alphabetically. \
@@ -73,11 +69,7 @@ impl Tool for FindTool {
             // match anywhere in the tree, consistent with pi-mono behaviour.
             let matcher = match Glob::new(&pattern) {
                 Ok(g) => g.compile_matcher(),
-                Err(e) => {
-                    return ToolResult::err(format!(
-                        "Invalid glob pattern '{pattern}': {e}"
-                    ))
-                }
+                Err(e) => return ToolResult::err(format!("Invalid glob pattern '{pattern}': {e}")),
             };
 
             // Verify the search directory exists before spawning the walker.

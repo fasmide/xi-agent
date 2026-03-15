@@ -11,6 +11,7 @@ use crate::{
     commands::CompletionItem,
     llm::Role,
     provider::context_window_for_model,
+    tool_presentation,
 };
 
 /// Background colour of the input panel.
@@ -478,19 +479,12 @@ fn build_log_lines(
             }
             Role::ToolCall => {
                 let name = msg.tool_name.as_deref().unwrap_or("unknown");
-                let args_preview = msg
-                    .tool_args
-                    .as_ref()
-                    .map(|a| {
-                        let s = a.to_string();
-                        if s.len() > 60 {
-                            format!("{}…", &s[..60])
-                        } else {
-                            s
-                        }
-                    })
-                    .unwrap_or_default();
-                let label = format!("⚙ {name}({args_preview})");
+                let label = match msg.tool_args.as_ref() {
+                    Some(args) => tool_presentation::tool_invocation_label(name, args),
+                    None => {
+                        tool_presentation::tool_invocation_label(name, &serde_json::Value::Null)
+                    }
+                };
                 append_message_colored(&mut lines, &label, width, Color::Cyan);
             }
             Role::ToolResult => {

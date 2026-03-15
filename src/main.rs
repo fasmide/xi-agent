@@ -19,6 +19,7 @@ mod commands;
 mod debug_log;
 mod llm;
 mod provider;
+mod tool_presentation;
 mod ui;
 
 use agent::{AgentEvent, AgentLoopConfig, build_system_prompt, tools::register_builtin_tools};
@@ -451,8 +452,7 @@ async fn run_print_mode(
                 // Suppress thinking tokens in print mode.
             }
             AgentEvent::ToolCallStart { name, args, .. } => {
-                let detail = tool_call_summary(&args);
-                eprintln!("{name} {detail}");
+                eprintln!("{}", tool_presentation::tool_invocation_label(&name, &args));
             }
             AgentEvent::ToolCallEnd {
                 name: _, result, ..
@@ -475,23 +475,4 @@ async fn run_print_mode(
     }
 
     std::process::exit(exit_code);
-}
-
-/// Extract a human-readable one-word summary from a tool call's arguments.
-/// Priority: path > command > pattern > first string value found.
-fn tool_call_summary(args: &serde_json::Value) -> String {
-    for key in &["path", "command", "pattern"] {
-        if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
-            return v.to_string();
-        }
-    }
-    // Fallback: first string value in the object.
-    if let Some(obj) = args.as_object() {
-        for v in obj.values() {
-            if let Some(s) = v.as_str() {
-                return s.to_string();
-            }
-        }
-    }
-    String::new()
 }

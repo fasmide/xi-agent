@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     auth::AuthStore,
+    config::PirsConfig,
     llm::{
         LlmProvider,
         codex::{CodexProvider, DEFAULT_BASE_URL as CODEX_DEFAULT_BASE_URL},
@@ -127,6 +128,7 @@ pub fn context_window_for_model(model: &str) -> Option<usize> {
 pub fn build_provider(
     kind: &ProviderKind,
     model: &str,
+    config: &PirsConfig,
 ) -> anyhow::Result<Arc<dyn LlmProvider + Send + Sync>> {
     match kind {
         ProviderKind::Copilot => {
@@ -139,7 +141,28 @@ pub fn build_provider(
             Ok(Arc::new(p))
         }
         ProviderKind::OpenAi => {
-            let p = OpenAiProvider::from_env()?.with_model(model);
+            let preset = std::env::var("PIRS_PRESET").unwrap_or_default();
+            let (default_base_url, preset_key_var): (&str, &str) = match preset.as_str() {
+                "openrouter" => ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+                "groq" => ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+                _ => ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+            };
+
+            let base_url =
+                std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base_url.to_string());
+
+            let api_key = std::env::var(preset_key_var)
+                .or_else(|_| std::env::var("OPENAI_API_KEY"))
+                .ok()
+                .or_else(|| config.openai.api_key.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Missing API key. Set {} / OPENAI_API_KEY or configure [openai].api_key.",
+                        preset_key_var
+                    )
+                })?;
+
+            let p = OpenAiProvider::new(base_url, model, api_key);
             Ok(Arc::new(p))
         }
         ProviderKind::Codex => {
@@ -154,7 +177,9 @@ pub fn build_provider(
         }
         ProviderKind::Ollama => {
             let base = std::env::var("OLLAMA_BASE_URL")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
+                .ok()
+                .or_else(|| config.ollama.base_url.clone())
+                .unwrap_or_else(|| "http://localhost:11434".to_string());
             Ok(Arc::new(OllamaProvider::new(base, model.to_string())))
         }
     }

@@ -16,6 +16,7 @@ mod agent;
 mod app;
 mod auth;
 mod commands;
+mod config;
 mod debug_log;
 mod llm;
 mod provider;
@@ -26,6 +27,7 @@ mod ui;
 use agent::{AgentEvent, AgentLoopConfig, build_system_prompt, tools::register_builtin_tools};
 use app::{App, SelectionResult};
 use commands::CommandAction;
+use config::PirsConfig;
 use llm::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture};
 use provider::{ProviderKind, build_provider};
 
@@ -59,32 +61,31 @@ async fn main() -> io::Result<()> {
 
     let cli = Cli::parse();
 
+    let mut config = match PirsConfig::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("warning: failed to load config.toml: {e}");
+            PirsConfig::default()
+        }
+    };
+
     // ── Non-interactive (--print / -p) mode ───────────────────────────────────
     if let Some(words) = cli.print {
         let prompt = words.join(" ");
-        return run_print_mode(prompt, cli.provider.as_deref(), cli.model.as_deref()).await;
+        return run_print_mode(
+            prompt,
+            cli.provider.as_deref(),
+            cli.model.as_deref(),
+            &config,
+        )
+        .await;
     }
 
-    // Determine the initial provider.
-    // Priority: --provider flag > PIRS_PROVIDER env var > Copilot default.
-    let mut current_kind = cli
-        .provider
-        .as_deref()
-        .and_then(ProviderKind::from_name)
-        .or_else(|| {
-            std::env::var("PIRS_PROVIDER")
-                .ok()
-                .and_then(|s| ProviderKind::from_name(&s))
-        })
-        .unwrap_or(ProviderKind::Copilot);
+    // Priority: --provider flag > PIRS_PROVIDER env var > config.toml > default.
+    let mut current_kind = resolve_provider_kind(cli.provider.as_deref(), &config);
 
-    // Priority: --model flag > COPILOT_MODEL / OPENAI_MODEL env vars > provider default.
-    let mut current_model = cli
-        .model
-        .clone()
-        .or_else(|| std::env::var("COPILOT_MODEL").ok())
-        .or_else(|| std::env::var("OPENAI_MODEL").ok())
-        .unwrap_or_else(|| current_kind.default_model().to_string());
+    // Priority: --model flag > env vars > config.toml > provider default.
+    let mut current_model = resolve_model(cli.model.as_deref(), &current_kind, &config);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -119,7 +120,7 @@ async fn main() -> io::Result<()> {
 
     loop {
         // Build (or re-build) the provider for the current kind + model.
-        let provider = match build_provider(&current_kind, &current_model) {
+        let provider = match build_provider(&current_kind, &current_model, &config) {
             Ok(p) => p,
             Err(e) => {
                 let msg = format!("[provider unavailable: {e}]");
@@ -149,16 +150,27 @@ async fn main() -> io::Result<()> {
                 current_model = name;
                 // Invalidate cached model list so the next fetch is fresh.
                 app.available_models = None;
+                persist_provider_model_selection(
+                    &mut config,
+                    &current_kind,
+                    &current_model,
+                    &mut app,
+                );
             }
 
             Ok(RunResult::ChangeProvider(name)) => {
                 if let Some(kind) = ProviderKind::from_name(&name) {
                     current_kind = kind;
-                    // Reset to the new provider's default model.
-                    current_model = current_kind.default_model().to_string();
+                    current_model = resolve_model(None, &current_kind, &config);
                     app.current_model = current_model.clone();
                     app.current_provider = current_kind.name().to_string();
                     app.available_models = None;
+                    persist_provider_model_selection(
+                        &mut config,
+                        &current_kind,
+                        &current_model,
+                        &mut app,
+                    );
                 }
                 // Unknown name: silently ignore and loop (provider unchanged).
             }
@@ -429,6 +441,54 @@ async fn run(
     }
 }
 
+fn resolve_provider_kind(cli_override: Option<&str>, config: &PirsConfig) -> ProviderKind {
+    cli_override
+        .and_then(ProviderKind::from_name)
+        .or_else(|| {
+            std::env::var("PIRS_PROVIDER")
+                .ok()
+                .and_then(|s| ProviderKind::from_name(&s))
+        })
+        .or_else(|| config.provider.as_deref().and_then(ProviderKind::from_name))
+        .unwrap_or(ProviderKind::Copilot)
+}
+
+fn resolve_model(cli_override: Option<&str>, kind: &ProviderKind, config: &PirsConfig) -> String {
+    cli_override
+        .map(ToString::to_string)
+        .or_else(|| std::env::var("COPILOT_MODEL").ok())
+        .or_else(|| std::env::var("OPENAI_MODEL").ok())
+        .or_else(|| match kind {
+            ProviderKind::Copilot => config.copilot.model.clone(),
+            ProviderKind::OpenAi => config.openai.model.clone(),
+            ProviderKind::Codex => config.codex.model.clone(),
+            ProviderKind::Ollama => config.ollama.model.clone(),
+        })
+        .unwrap_or_else(|| kind.default_model().to_string())
+}
+
+fn persist_provider_model_selection(
+    config: &mut PirsConfig,
+    kind: &ProviderKind,
+    model: &str,
+    app: &mut App,
+) {
+    config.provider = Some(kind.name().to_string());
+    match kind {
+        ProviderKind::Copilot => config.copilot.model = Some(model.to_string()),
+        ProviderKind::OpenAi => config.openai.model = Some(model.to_string()),
+        ProviderKind::Codex => config.codex.model = Some(model.to_string()),
+        ProviderKind::Ollama => config.ollama.model = Some(model.to_string()),
+    }
+
+    if let Err(e) = config.save() {
+        log::debug!("failed to persist provider/model config: {}", e);
+        app.messages.push(Message::assistant(format!(
+            "[failed to persist config.toml: {e}]"
+        )));
+    }
+}
+
 // ── Non-interactive helpers ───────────────────────────────────────────────────
 
 /// Non-interactive mode: run the agent loop for `prompt`, stream output to
@@ -437,23 +497,12 @@ async fn run_print_mode(
     prompt: String,
     provider_override: Option<&str>,
     model_override: Option<&str>,
+    config: &PirsConfig,
 ) -> io::Result<()> {
-    let current_kind = provider_override
-        .and_then(ProviderKind::from_name)
-        .or_else(|| {
-            std::env::var("PIRS_PROVIDER")
-                .ok()
-                .and_then(|s| ProviderKind::from_name(&s))
-        })
-        .unwrap_or(ProviderKind::Copilot);
+    let current_kind = resolve_provider_kind(provider_override, config);
+    let current_model = resolve_model(model_override, &current_kind, config);
 
-    let current_model = model_override
-        .map(|s| s.to_string())
-        .or_else(|| std::env::var("COPILOT_MODEL").ok())
-        .or_else(|| std::env::var("OPENAI_MODEL").ok())
-        .unwrap_or_else(|| current_kind.default_model().to_string());
-
-    let provider = build_provider(&current_kind, &current_model)
+    let provider = build_provider(&current_kind, &current_model, config)
         .map_err(|e| io::Error::other(format!("provider error: {e}")))?;
 
     let tools = register_builtin_tools(None);

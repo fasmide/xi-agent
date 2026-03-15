@@ -15,7 +15,10 @@ src/
   app.rs             — App state, event handling, submission, scroll
   ui.rs              — all ratatui rendering, pre-wrapping, scroll logic
   commands.rs        — slash-command registry and completion items
+  config.rs          — config.toml loading (XDG + HOME fallback)
   provider.rs        — ProviderKind enum, build_provider(), context-window table
+  session.rs         — persisted chat session storage/index
+  auth/              — provider auth store + login/refresh flows
   agent/
     mod.rs           — run_agent_loop: the multi-turn agentic loop
     types.rs         — Tool trait, ToolRegistry, AgentEvent, AgentLoopConfig
@@ -141,21 +144,16 @@ provider is active.
 
 ## What Is Not Here Yet
 
-- **Provider authentication** — no `/login` command; credentials must be
-  placed manually; missing credentials cause a silent fallback; 401 responses
-  are not retried. See [plan](plans/2026-03-14-provider-auth.md).
-- **`ask_user` tool** — no built-in tool for the model to ask the user a
-  question mid-task; the agent cannot pause for user decisions. See
-  [plan](plans/2026-03-14-ask-user-tool.md).
-- **Config file** — provider selection and API keys are env-var only; no
-  persistent `~/.config/pirs/config.toml`. See
-  [plan](plans/2026-03-14-config-file.md).
+- **OS keyring-backed secret storage** — auth is now pirs-owned and supports
+  in-app `/login`, but secrets still live in `auth.json` rather than the
+  platform keyring. See [ROADMAP](ROADMAP.md).
 - **Context window management** — no truncation or summarisation when
   conversation history exceeds the model's context window. See
   [plan](plans/2026-03-14-context-management.md).
 - **Anthropic and Gemini providers** — only Copilot, OpenAI, Codex, and
   Ollama are implemented.
-- **Tests** — no unit or integration tests exist yet. See
+- **Deeper test coverage** — a small unit-test baseline exists, but there are
+  no integration tests for end-to-end provider/agent workflows yet. See
   [plan](plans/2026-03-14-tests.md).
 
 See [ROADMAP](ROADMAP.md) for prioritised work items.

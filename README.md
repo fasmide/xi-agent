@@ -40,13 +40,53 @@ pirs -P ollama -m llama3.2
 
 ## Configuration
 
-| Variable           | Default                          | Description                        |
-|--------------------|----------------------------------|------------------------------------|
-| `PIRS_PROVIDER`    | `copilot`                        | Active provider                    |
-| `COPILOT_MODEL`    | `gpt-4o`                         | Model for Copilot / OpenAI         |
-| `OPENAI_API_KEY`   | —                                | API key for OpenAI provider        |
-| `OPENAI_MODEL`     | `gpt-4o`                         | Model for OpenAI / Codex / Ollama  |
-| `OLLAMA_BASE_URL`  | `http://localhost:11434`         | Ollama server base URL             |
+pirs supports an optional config file at:
+
+- `$XDG_CONFIG_HOME/pirs/config.toml` (preferred)
+- `~/.config/pirs/config.toml` (fallback)
+
+Precedence (highest → lowest):
+
+1. CLI flags (`--provider`, `--model`)
+2. Environment variables
+3. `config.toml`
+4. Built-in defaults
+
+When you change provider/model in the TUI (`/provider`, `/model`), pirs writes
+that selection back to `config.toml` so it persists across restarts.
+
+Example:
+
+```toml
+provider = "openai"
+
+[openai]
+api_key = "sk-..."
+model = "gpt-4o-mini"
+
+[copilot]
+model = "gpt-4o"
+
+[codex]
+model = "gpt-5.4"
+
+[ollama]
+base_url = "http://localhost:11434"
+model = "llama3.1"
+```
+
+Environment variables:
+
+| Variable           | Description                        |
+|--------------------|------------------------------------|
+| `PIRS_PROVIDER`    | Active provider                    |
+| `COPILOT_MODEL`    | Model override (global)            |
+| `OPENAI_MODEL`     | Model override (global)            |
+| `OPENAI_API_KEY`   | OpenAI API key                     |
+| `OLLAMA_BASE_URL`  | Ollama server base URL             |
+| `OPENAI_BASE_URL`  | OpenAI-compatible base URL override |
+| `CODEX_BASE_URL`   | Codex backend base URL override     |
+| `PIRS_PRESET`      | OpenAI preset (`openrouter`, `groq`) |
 
 ## CLI flags
 

@@ -11,7 +11,7 @@
 ## Problem
 
 Every provider requires credentials that currently must be obtained and placed
-manually before pirs can be used:
+manually before tau can be used:
 
 | Provider | What is needed | Where it is read |
 |----------|----------------|------------------|
@@ -20,9 +20,9 @@ manually before pirs can be used:
 | `codex`   | chatgpt.com session token + account ID | `~/.pi/agent/auth.json` → `openai-codex` |
 | `ollama`  | none | — |
 
-If the credentials are absent, `build_provider` returns an error and pirs
+If the credentials are absent, `build_provider` returns an error and tau
 falls back to Copilot with a terse inline message. There is no way to
-authenticate from inside pirs itself.
+authenticate from inside tau itself.
 
 ## Goal
 
@@ -94,7 +94,7 @@ pub struct CopilotCreds {
 ### Overview
 
 ```
-pirs                      GitHub                     Copilot API
+tau                      GitHub                     Copilot API
  │                            │                           │
  ├─ POST /login/device/code ──►                           │
  │◄─ device_code, user_code ──┤                           │
@@ -125,7 +125,7 @@ Request device code body:
 ```
 
 > The `client_id` is the GitHub OAuth App registered for Copilot access.
-> pirs should use its own registered OAuth App; during development the
+> tau should use its own registered OAuth App; during development the
 > VS Code Copilot extension's public `client_id` can be used as a
 > placeholder (`Iv1.b507a08c87ecfe98`).
 

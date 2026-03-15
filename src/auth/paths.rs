@@ -4,8 +4,8 @@ use anyhow::Context;
 use directories::ProjectDirs;
 
 pub fn config_dir() -> anyhow::Result<PathBuf> {
-    let dirs = ProjectDirs::from("", "pirs", "pirs")
-        .context("Could not resolve platform config directory for pirs")?;
+    let dirs = ProjectDirs::from("", "tau", "tau")
+        .context("Could not resolve platform config directory for tau")?;
     Ok(dirs.config_dir().to_path_buf())
 }
 

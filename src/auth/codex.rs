@@ -61,7 +61,7 @@ pub async fn login(
         qp.append_pair("state", &state);
         qp.append_pair("id_token_add_organizations", "true");
         qp.append_pair("codex_cli_simplified_flow", "true");
-        qp.append_pair("originator", "pirs");
+        qp.append_pair("originator", "tau");
     }
 
     on_event(CodexLoginEvent::OpenBrowser(url.to_string()));
@@ -193,7 +193,7 @@ async fn wait_for_callback(state: &str, cancel: Arc<AtomicBool>) -> anyhow::Resu
             log::debug!("codex oauth callback missing authorization code");
             ("400 Bad Request", "Missing authorization code")
         } else {
-            ("200 OK", "Authentication successful. Return to pirs.")
+            ("200 OK", "Authentication successful. Return to tau.")
         };
 
         let response = format!(

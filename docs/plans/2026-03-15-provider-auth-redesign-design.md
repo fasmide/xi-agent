@@ -6,10 +6,10 @@
 
 ## Summary
 
-Redesign provider authentication so pirs no longer reads credentials from
+Redesign provider authentication so tau no longer reads credentials from
 `~/.pi/agent/auth.json`.
 
-Instead, pirs will:
+Instead, tau will:
 
 - store its own credentials in a platform-appropriate app directory
 - support **interactive initial authentication** from inside the TUI
@@ -33,7 +33,7 @@ It intentionally does **not** preserve pi's auth file compatibility.
 
 ### Accepted
 
-- Use a **pirs-owned auth file** in a platform-specific app directory.
+- Use a **tau-owned auth file** in a platform-specific app directory.
 - Support **interactive initial authentication** for both `copilot` and `codex`.
 - Scope this work to **`copilot` and `codex` only**.
 - Do **not** read or migrate credentials from `~/.pi`.
@@ -44,7 +44,7 @@ It intentionally does **not** preserve pi's auth file compatibility.
 
 - Continuing to read `~/.pi/agent/auth.json`
 - Automatic or one-time migration from `~/.pi`
-- Designing around pi compatibility instead of pirs ownership
+- Designing around pi compatibility instead of tau ownership
 - Manual token file editing as the primary UX for `copilot` or `codex`
 
 ---
@@ -52,7 +52,7 @@ It intentionally does **not** preserve pi's auth file compatibility.
 ## Goals
 
 - Remove all direct token reads from `~/.pi`.
-- Make first-time auth possible from inside pirs.
+- Make first-time auth possible from inside tau.
 - Make token renewal automatic and quiet when refresh tokens are valid.
 - Keep auth logic testable and isolated from provider request/streaming code.
 - Improve startup and runtime auth errors so users get clear next steps.
@@ -87,20 +87,20 @@ subsystem is slightly more work up front, but gives:
 
 ### Location
 
-Store credentials in a pirs-owned auth file resolved from a platform helper.
+Store credentials in a tau-owned auth file resolved from a platform helper.
 
 Expected locations:
 
-- Linux: `$XDG_CONFIG_HOME/pirs/auth.json` or `~/.config/pirs/auth.json`
-- macOS: `~/Library/Application Support/pirs/auth.json`
-- Windows: `%APPDATA%\\pirs\\auth.json`
+- Linux: `$XDG_CONFIG_HOME/tau/auth.json` or `~/.config/tau/auth.json`
+- macOS: `~/Library/Application Support/tau/auth.json`
+- Windows: `%APPDATA%\\tau\\auth.json`
 
 Implementation should use `directories::ProjectDirs` so the rest of the code
 never hardcodes platform paths.
 
 ### File format
 
-Use a pirs-native JSON schema.
+Use a tau-native JSON schema.
 
 ```json
 {
@@ -162,7 +162,7 @@ src/
   - credential lookup
 
 - `auth/paths.rs`
-  - resolve the pirs config directory and `auth.json` path
+  - resolve the tau config directory and `auth.json` path
 
 - `auth/types.rs`
   - credential structs
@@ -215,7 +215,7 @@ Flow:
 3. try to open the browser
 4. poll until the user completes login or cancels
 5. exchange the result for a Copilot session token
-6. persist credentials in pirs auth storage
+6. persist credentials in tau auth storage
 
 ### Codex initial authentication
 
@@ -230,7 +230,7 @@ Flow:
 4. complete login automatically if callback arrives
 5. exchange authorization code for tokens
 6. extract `account_id` from the access token
-7. persist credentials in pirs auth storage
+7. persist credentials in tau auth storage
 
 If callback setup fails or callback never arrives, fail clearly and ask the
 user to retry `/login codex` in a suitable environment.
@@ -339,7 +339,7 @@ Rules:
 
 #### Path resolution
 
-- resolves the correct pirs app dir on each platform
+- resolves the correct tau app dir on each platform
 - builds the expected `auth.json` path
 
 #### Store
@@ -376,7 +376,7 @@ Update the roadmap to reflect:
 
 1. provider auth now means **interactive** first-time login plus refresh for
    `copilot` and `codex`
-2. pirs owns its own credentials and does not reuse `~/.pi`
+2. tau owns its own credentials and does not reuse `~/.pi`
 3. OS keyring / credential storage is a separate follow-up item
 
 ---
@@ -436,6 +436,6 @@ Useful references in `../pi-mono`:
   - localhost callback server
   - account ID extraction from access token
 
-The pirs design intentionally copies the *shape* of these flows, but not the
+The tau design intentionally copies the *shape* of these flows, but not the
 storage choice of `~/.pi/agent/auth.json`.
 son`.

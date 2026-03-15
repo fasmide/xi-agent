@@ -21,7 +21,7 @@ Create:
 - `src/auth/store.rs`
 
 ### 1.3 Implement platform auth path resolution
-- `auth/paths.rs` resolves pirs config dir using `ProjectDirs`.
+- `auth/paths.rs` resolves tau config dir using `ProjectDirs`.
 - Expose helper for `auth.json` path.
 
 ### 1.4 Implement auth schema types
@@ -83,7 +83,7 @@ Deliverable: no runtime token reads from `~/.pi` for Copilot/Codex.
 - No manual token/code paste flow.
 - Persist resulting credentials to `AuthStore`.
 
-Deliverable: user can authenticate both providers from inside pirs.
+Deliverable: user can authenticate both providers from inside tau.
 
 ---
 

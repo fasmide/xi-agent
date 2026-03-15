@@ -6,7 +6,7 @@
 
 ## Problem
 
-All configuration is currently env-var only. Users must set `PIRS_PROVIDER`,
+All configuration is currently env-var only. Users must set `TAU_PROVIDER`,
 `OPENAI_API_KEY`, `COPILOT_MODEL`, etc. on every launch or in their shell
 profile. There is no way to persist a preferred provider, model, or API key
 without shell-level configuration. This makes the first-run experience poor
@@ -14,16 +14,16 @@ and multi-provider workflows awkward.
 
 ## Goal
 
-Add an optional `~/.config/pirs/config.toml` that can store API keys, the
+Add an optional `~/.config/tau/config.toml` that can store API keys, the
 default provider, and per-provider default models. Env vars and CLI flags
 override the config file, so existing workflows are unaffected.
 
 ## Config file format
 
 ```toml
-# ~/.config/pirs/config.toml
+# ~/.config/tau/config.toml
 
-# Default provider if PIRS_PROVIDER and --provider are not set.
+# Default provider if TAU_PROVIDER and --provider are not set.
 provider = "openai"
 
 [openai]
@@ -44,17 +44,17 @@ All keys are optional. A missing file is silently ignored (not an error).
 ## Precedence (highest to lowest)
 
 1. CLI flag (`--provider`, `--model`)
-2. Env var (`PIRS_PROVIDER`, `OPENAI_API_KEY`, `COPILOT_MODEL`, …)
-3. Config file (`~/.config/pirs/config.toml`)
+2. Env var (`TAU_PROVIDER`, `OPENAI_API_KEY`, `COPILOT_MODEL`, …)
+3. Config file (`~/.config/tau/config.toml`)
 4. Hard-coded defaults in `provider.rs`
 
 ## New module: `src/config.rs`
 
 ```rust
-/// Parsed representation of ~/.config/pirs/config.toml.
+/// Parsed representation of ~/.config/tau/config.toml.
 /// All fields are optional; absent values fall through to env vars / defaults.
 #[derive(Debug, Default, serde::Deserialize)]
-pub struct PirsConfig {
+pub struct TauConfig {
     pub provider: Option<String>,
 
     #[serde(default)]
@@ -89,8 +89,8 @@ pub struct CodexConfig {
     pub model: Option<String>,
 }
 
-impl PirsConfig {
-    /// Load from ~/.config/pirs/config.toml.
+impl TauConfig {
+    /// Load from ~/.config/tau/config.toml.
     /// Returns Default if the file does not exist.
     pub fn load() -> anyhow::Result<Self> { … }
 }
@@ -100,14 +100,14 @@ impl PirsConfig {
 
 ## Changes to `provider.rs`
 
-`build_provider` gains a `config: &PirsConfig` parameter. Each provider
+`build_provider` gains a `config: &TauConfig` parameter. Each provider
 constructor reads from the config struct before falling back to env vars.
 
 ```rust
 pub fn build_provider(
     kind: &ProviderKind,
     model: &str,
-    config: &PirsConfig,
+    config: &TauConfig,
 ) -> anyhow::Result<Arc<dyn LlmProvider + Send + Sync>>
 ```
 
@@ -116,7 +116,7 @@ pub fn build_provider(
 Load config once at startup before any provider construction:
 
 ```rust
-let config = PirsConfig::load().unwrap_or_default();
+let config = TauConfig::load().unwrap_or_default();
 ```
 
 Pass it through to `build_provider` and to the initial provider/model
@@ -124,14 +124,14 @@ resolution logic.
 
 ## Config file location
 
-Follow the XDG spec: `$XDG_CONFIG_HOME/pirs/config.toml`, falling back to
-`~/.config/pirs/config.toml`.
+Follow the XDG spec: `$XDG_CONFIG_HOME/tau/config.toml`, falling back to
+`~/.config/tau/config.toml`.
 
 ## Implementation Tasks
 
 1. Add `toml` to `Cargo.toml`.
-2. Implement `src/config.rs` with `PirsConfig` and `PirsConfig::load()`.
-3. Update `provider.rs`: `build_provider` takes `&PirsConfig`; each arm reads
+2. Implement `src/config.rs` with `TauConfig` and `TauConfig::load()`.
+3. Update `provider.rs`: `build_provider` takes `&TauConfig`; each arm reads
    from config before env vars.
 4. Update `main.rs`: load config, thread it through provider construction and
    initial provider/model resolution.

@@ -300,7 +300,7 @@ impl LlmProvider for OllamaProvider {
             };
 
             if let Ok(json) = serde_json::to_string_pretty(&body) {
-                log::debug!("[PIRS_DEBUG] → request:\n{json}");
+                log::debug!("[TAU_DEBUG] → request:\n{json}");
             }
 
             let response = match client
@@ -339,7 +339,7 @@ impl LlmProvider for OllamaProvider {
                     let line = buf[..pos].trim().to_string();
                     buf.drain(..=pos);
                     if !line.is_empty() {
-                        log::debug!("[PIRS_DEBUG] ← chunk {line_num}: {line}");
+                        log::debug!("[TAU_DEBUG] ← chunk {line_num}: {line}");
                         line_num += 1;
                     }
                     let mut events = Vec::new();

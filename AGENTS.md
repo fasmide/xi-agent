@@ -10,4 +10,4 @@ This repository is a Rust AI coding assistant harness.
 
 ## Debugging
 
-- Debug logs are written to `~/.cache/pirs`.
+- Debug logs are written to `~/.cache/tau`.

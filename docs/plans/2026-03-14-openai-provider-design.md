@@ -33,10 +33,10 @@ Resolution order for each field:
 | `base_url`  | `OPENAI_BASE_URL`  | preset default or `https://api.openai.com`    |
 | `api_key`   | `OPENAI_API_KEY`   | `openai-codex.access` in `~/.pi/agent/auth.json` |
 
-**Named presets** are selected via `PIRS_PRESET` env var and override the
+**Named presets** are selected via `TAU_PRESET` env var and override the
 base URL and the env var used for the API key:
 
-| `PIRS_PRESET`  | `base_url`                          | API key env var       |
+| `TAU_PRESET`  | `base_url`                          | API key env var       |
 |----------------|-------------------------------------|-----------------------|
 | *(unset)*      | `https://api.openai.com`            | `OPENAI_API_KEY`      |
 | `openrouter`   | `https://openrouter.ai/api`         | `OPENROUTER_API_KEY`  |
@@ -113,6 +113,6 @@ JSON.
 ## Out of Scope
 
 - Automatic token refresh
-- Config file (`~/.config/pirs/config.toml`)
+- Config file (`~/.config/tau/config.toml`)
 - Anthropic / Gemini providers
 - Thinking / reasoning token support (no OpenAI equivalent at this time)

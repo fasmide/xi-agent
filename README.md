@@ -1,4 +1,4 @@
-# pirs
+# tau
 
 An AI agent harness for the terminal. Chat with local and remote LLMs using
 a streaming TUI, with full tool-calling support so the model can read files,
@@ -18,32 +18,32 @@ what's coming next.
 
 ```sh
 cargo build --release
-./target/release/pirs
+./target/release/tau
 ```
 
 ## Providers
 
 | Provider         | Key / credential                                      | Env var override     |
 |------------------|-------------------------------------------------------|----------------------|
-| `copilot`        | pirs auth store (`auth.toml` in platform config dir) | —                    |
+| `copilot`        | tau auth store (`auth.toml` in platform config dir) | —                    |
 | `openai`         | `OPENAI_API_KEY`                                      | `OPENAI_MODEL`       |
-| `codex`          | pirs auth store (`auth.toml` in platform config dir) | `OPENAI_MODEL`       |
+| `codex`          | tau auth store (`auth.toml` in platform config dir) | `OPENAI_MODEL`       |
 | `ollama`         | none (local)                                          | `OLLAMA_BASE_URL`, `OPENAI_MODEL` |
 
 The default provider is `copilot`. Override at startup:
 
 ```sh
-PIRS_PROVIDER=openai pirs
-pirs --provider openai
-pirs -P ollama -m llama3.2
+TAU_PROVIDER=openai tau
+tau --provider openai
+tau -P ollama -m llama3.2
 ```
 
 ## Configuration
 
-pirs supports an optional config file at:
+tau supports an optional config file at:
 
-- `$XDG_CONFIG_HOME/pirs/config.toml` (preferred)
-- `~/.config/pirs/config.toml` (fallback)
+- `$XDG_CONFIG_HOME/tau/config.toml` (preferred)
+- `~/.config/tau/config.toml` (fallback)
 
 Precedence (highest → lowest):
 
@@ -52,7 +52,7 @@ Precedence (highest → lowest):
 3. `config.toml`
 4. Built-in defaults
 
-When you change provider/model in the TUI (`/provider`, `/model`), pirs writes
+When you change provider/model in the TUI (`/provider`, `/model`), tau writes
 that selection back to `config.toml` so it persists across restarts.
 
 Example:
@@ -79,14 +79,14 @@ Environment variables:
 
 | Variable           | Description                        |
 |--------------------|------------------------------------|
-| `PIRS_PROVIDER`    | Active provider                    |
+| `TAU_PROVIDER`    | Active provider                    |
 | `COPILOT_MODEL`    | Model override (global)            |
 | `OPENAI_MODEL`     | Model override (global)            |
 | `OPENAI_API_KEY`   | OpenAI API key                     |
 | `OLLAMA_BASE_URL`  | Ollama server base URL             |
 | `OPENAI_BASE_URL`  | OpenAI-compatible base URL override |
 | `CODEX_BASE_URL`   | Codex backend base URL override     |
-| `PIRS_PRESET`      | OpenAI preset (`openrouter`, `groq`) |
+| `TAU_PRESET`      | OpenAI preset (`openrouter`, `groq`) |
 
 ## CLI flags
 
@@ -142,8 +142,8 @@ The agent has access to five tools out of the box:
 Send a single prompt and stream the response to stdout:
 
 ```sh
-pirs --print explain the Cargo.toml
-pirs -p what does src/agent/mod.rs do
+tau --print explain the Cargo.toml
+tau -p what does src/agent/mod.rs do
 ```
 
 Tool calls are printed to stderr; final output goes to stdout, making it

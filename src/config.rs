@@ -3,7 +3,7 @@ use std::{env, ffi::OsStr, fs, path::PathBuf};
 use anyhow::Context;
 
 #[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize)]
-pub struct PirsConfig {
+pub struct TauConfig {
     pub provider: Option<String>,
 
     #[serde(default)]
@@ -38,8 +38,8 @@ pub struct CodexConfig {
     pub model: Option<String>,
 }
 
-impl PirsConfig {
-    /// Load from $XDG_CONFIG_HOME/pirs/config.toml (or ~/.config/pirs/config.toml).
+impl TauConfig {
+    /// Load from $XDG_CONFIG_HOME/tau/config.toml (or ~/.config/tau/config.toml).
     /// Missing file is not an error and returns `Default`.
     pub fn load() -> anyhow::Result<Self> {
         let path = config_path()?;
@@ -84,19 +84,19 @@ fn config_path_from(xdg_home: Option<&OsStr>, home: Option<&OsStr>) -> anyhow::R
     if let Some(xdg_home) = xdg_home
         && !xdg_home.is_empty()
     {
-        return Ok(PathBuf::from(xdg_home).join("pirs").join("config.toml"));
+        return Ok(PathBuf::from(xdg_home).join("tau").join("config.toml"));
     }
 
     let home = home.context("Could not resolve HOME for config path")?;
     Ok(PathBuf::from(home)
         .join(".config")
-        .join("pirs")
+        .join("tau")
         .join("config.toml"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PirsConfig, config_path_from};
+    use super::{TauConfig, config_path_from};
     use std::ffi::OsStr;
 
     #[test]
@@ -119,7 +119,7 @@ base_url = "http://localhost:11434"
 model = "llama3.1"
 "#;
 
-        let cfg = PirsConfig::from_toml_str(raw).expect("config parses");
+        let cfg = TauConfig::from_toml_str(raw).expect("config parses");
 
         assert_eq!(cfg.provider.as_deref(), Some("openai"));
         assert_eq!(cfg.openai.api_key.as_deref(), Some("sk-test"));
@@ -137,7 +137,7 @@ model = "llama3.1"
     fn config_path_prefers_xdg() {
         let path = config_path_from(Some(OsStr::new("/tmp/xdg")), Some(OsStr::new("/tmp/home")))
             .expect("path resolves");
-        assert_eq!(path, std::path::Path::new("/tmp/xdg/pirs/config.toml"));
+        assert_eq!(path, std::path::Path::new("/tmp/xdg/tau/config.toml"));
     }
 
     #[test]
@@ -145,7 +145,7 @@ model = "llama3.1"
         let path = config_path_from(None, Some(OsStr::new("/home/alice"))).expect("path resolves");
         assert_eq!(
             path,
-            std::path::Path::new("/home/alice/.config/pirs/config.toml")
+            std::path::Path::new("/home/alice/.config/tau/config.toml")
         );
     }
 }

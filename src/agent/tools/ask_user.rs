@@ -57,7 +57,7 @@ impl Tool for AskUserTool {
                 },
                 "allowMultiple": {
                     "type": "boolean",
-                    "description": "Whether multiple options may be selected (currently ignored in pirs UI)"
+                    "description": "Whether multiple options may be selected (currently ignored in tau UI)"
                 },
                 "allowFreeform": {
                     "type": "boolean",

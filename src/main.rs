@@ -27,18 +27,18 @@ mod ui;
 use agent::{AgentEvent, AgentLoopConfig, build_system_prompt, tools::register_builtin_tools};
 use app::{App, SelectionResult};
 use commands::CommandAction;
-use config::PirsConfig;
+use config::TauConfig;
 use llm::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture};
 use provider::{ProviderKind, build_provider};
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
-/// pirs — a terminal-based AI coding agent
+/// tau — a terminal-based AI coding agent
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// LLM provider to use (copilot, openai, codex, ollama).
-    /// Overrides the PIRS_PROVIDER environment variable.
+    /// Overrides the TAU_PROVIDER environment variable.
     #[arg(long, short = 'P', value_name = "PROVIDER")]
     provider: Option<String>,
 
@@ -61,11 +61,11 @@ async fn main() -> io::Result<()> {
 
     let cli = Cli::parse();
 
-    let mut config = match PirsConfig::load() {
+    let mut config = match TauConfig::load() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("warning: failed to load config.toml: {e}");
-            PirsConfig::default()
+            TauConfig::default()
         }
     };
 
@@ -81,7 +81,7 @@ async fn main() -> io::Result<()> {
         .await;
     }
 
-    // Priority: --provider flag > PIRS_PROVIDER env var > config.toml > default.
+    // Priority: --provider flag > TAU_PROVIDER env var > config.toml > default.
     let mut current_kind = resolve_provider_kind(cli.provider.as_deref(), &config);
 
     // Priority: --model flag > env vars > config.toml > provider default.
@@ -441,11 +441,11 @@ async fn run(
     }
 }
 
-fn resolve_provider_kind(cli_override: Option<&str>, config: &PirsConfig) -> ProviderKind {
+fn resolve_provider_kind(cli_override: Option<&str>, config: &TauConfig) -> ProviderKind {
     cli_override
         .and_then(ProviderKind::from_name)
         .or_else(|| {
-            std::env::var("PIRS_PROVIDER")
+            std::env::var("TAU_PROVIDER")
                 .ok()
                 .and_then(|s| ProviderKind::from_name(&s))
         })
@@ -453,7 +453,7 @@ fn resolve_provider_kind(cli_override: Option<&str>, config: &PirsConfig) -> Pro
         .unwrap_or(ProviderKind::Copilot)
 }
 
-fn resolve_model(cli_override: Option<&str>, kind: &ProviderKind, config: &PirsConfig) -> String {
+fn resolve_model(cli_override: Option<&str>, kind: &ProviderKind, config: &TauConfig) -> String {
     cli_override
         .map(ToString::to_string)
         .or_else(|| std::env::var("COPILOT_MODEL").ok())
@@ -468,7 +468,7 @@ fn resolve_model(cli_override: Option<&str>, kind: &ProviderKind, config: &PirsC
 }
 
 fn persist_provider_model_selection(
-    config: &mut PirsConfig,
+    config: &mut TauConfig,
     kind: &ProviderKind,
     model: &str,
     app: &mut App,
@@ -497,7 +497,7 @@ async fn run_print_mode(
     prompt: String,
     provider_override: Option<&str>,
     model_override: Option<&str>,
-    config: &PirsConfig,
+    config: &TauConfig,
 ) -> io::Result<()> {
     let current_kind = resolve_provider_kind(provider_override, config);
     let current_model = resolve_model(model_override, &current_kind, config);

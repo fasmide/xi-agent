@@ -64,7 +64,7 @@ impl CodexProvider {
             }
 
             log::debug!(
-                "[PIRS_DEBUG] → codex request:\n{}",
+                "[TAU_DEBUG] → codex request:\n{}",
                 serde_json::to_string_pretty(&body).unwrap_or_default()
             );
 
@@ -130,7 +130,7 @@ impl CodexProvider {
                         return;
                     }
 
-                    log::debug!("[PIRS_DEBUG] ← chunk {line_num}: {data}");
+                    log::debug!("[TAU_DEBUG] ← chunk {line_num}: {data}");
                     line_num += 1;
 
                     let ev: serde_json::Value = match serde_json::from_str(data) {
@@ -260,7 +260,7 @@ fn resolve_codex_url(base_url: &str) -> String {
 
 // ── Message conversion ────────────────────────────────────────────────────────
 
-/// Convert pirs `Message` history to the Responses API `input` array.
+/// Convert tau `Message` history to the Responses API `input` array.
 /// System messages are excluded (they go in `instructions`).
 fn convert_messages(messages: &[Message]) -> Vec<serde_json::Value> {
     let mut out = Vec::new();

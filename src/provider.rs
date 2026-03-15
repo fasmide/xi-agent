@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     auth::AuthStore,
-    config::PirsConfig,
+    config::TauConfig,
     llm::{
         LlmProvider,
         codex::{CodexProvider, DEFAULT_BASE_URL as CODEX_DEFAULT_BASE_URL},
@@ -128,7 +128,7 @@ pub fn context_window_for_model(model: &str) -> Option<usize> {
 pub fn build_provider(
     kind: &ProviderKind,
     model: &str,
-    config: &PirsConfig,
+    config: &TauConfig,
 ) -> anyhow::Result<Arc<dyn LlmProvider + Send + Sync>> {
     match kind {
         ProviderKind::Copilot => {
@@ -141,7 +141,7 @@ pub fn build_provider(
             Ok(Arc::new(p))
         }
         ProviderKind::OpenAi => {
-            let preset = std::env::var("PIRS_PRESET").unwrap_or_default();
+            let preset = std::env::var("TAU_PRESET").unwrap_or_default();
             let (default_base_url, preset_key_var): (&str, &str) = match preset.as_str() {
                 "openrouter" => ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
                 "groq" => ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),

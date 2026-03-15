@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`pirs` is a terminal AI agent harness. It provides a streaming TUI for
+`tau` is a terminal AI agent harness. It provides a streaming TUI for
 conversational interaction with LLMs and runs the full agentic loop: user
 message → model response → tool call → tool result → model continues, for
 up to `max_turns` iterations.
@@ -144,7 +144,7 @@ provider is active.
 
 ## What Is Not Here Yet
 
-- **OS keyring-backed secret storage** — auth is now pirs-owned and supports
+- **OS keyring-backed secret storage** — auth is now tau-owned and supports
   in-app `/login`, but secrets still live in `auth.json` rather than the
   platform keyring. See [ROADMAP](ROADMAP.md).
 - **Context window management** — no truncation or summarisation when

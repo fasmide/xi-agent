@@ -12,7 +12,7 @@ static LOG_ENABLED: OnceLock<bool> = OnceLock::new();
 static LOG_INITIALIZED: OnceLock<()> = OnceLock::new();
 
 fn is_enabled() -> bool {
-    *LOG_ENABLED.get_or_init(|| match std::env::var("PIRS_DEBUG") {
+    *LOG_ENABLED.get_or_init(|| match std::env::var("TAU_DEBUG") {
         Ok(v) => {
             let v = v.trim().to_ascii_lowercase();
             !(v.is_empty() || v == "0" || v == "false" || v == "off")
@@ -30,11 +30,11 @@ pub fn init_logging() {
         return;
     }
 
-    let Some(dirs) = ProjectDirs::from("", "pirs", "pirs") else {
+    let Some(dirs) = ProjectDirs::from("", "tau", "tau") else {
         return;
     };
     let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-    let log_path = dirs.cache_dir().join(format!("pirs-debug-{timestamp}.log"));
+    let log_path = dirs.cache_dir().join(format!("tau-debug-{timestamp}.log"));
 
     if let Some(parent) = log_path.parent()
         && fs::create_dir_all(parent).is_err()

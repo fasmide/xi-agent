@@ -42,14 +42,14 @@ impl OpenAiProvider {
     /// Build from environment variables and named presets.
     ///
     /// Resolution order:
-    /// - `PIRS_PRESET` selects a named preset (openrouter, groq) which
+    /// - `TAU_PRESET` selects a named preset (openrouter, groq) which
     ///   sets the default base URL and the API-key env var.
     /// - `OPENAI_BASE_URL` overrides the preset base URL.
     /// - `OPENAI_MODEL`    overrides the default model (gpt-4o).
     /// - Preset key env var (e.g. `OPENROUTER_API_KEY`) is tried first,
     ///   then `OPENAI_API_KEY`.
     pub fn from_env() -> anyhow::Result<Self> {
-        let preset = std::env::var("PIRS_PRESET").unwrap_or_default();
+        let preset = std::env::var("TAU_PRESET").unwrap_or_default();
 
         let (default_base_url, preset_key_var): (&str, &str) = match preset.as_str() {
             "openrouter" => ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
@@ -104,7 +104,7 @@ impl OpenAiProvider {
             };
 
             if let Ok(json) = serde_json::to_string_pretty(&body) {
-                log::debug!("[PIRS_DEBUG] → request:\n{json}");
+                log::debug!("[TAU_DEBUG] → request:\n{json}");
             }
 
             let mut req = client
@@ -187,7 +187,7 @@ impl OpenAiProvider {
                     }
 
                     if !line.is_empty() {
-                        log::debug!("[PIRS_DEBUG] ← chunk {line_num}: {line}");
+                        log::debug!("[TAU_DEBUG] ← chunk {line_num}: {line}");
                         line_num += 1;
                     }
 
@@ -352,11 +352,11 @@ fn normalize_tool_name(name: &str) -> String {
     }
 }
 
-/// Convert a pirs `Message` history to OpenAI Chat Completions messages.
+/// Convert a tau `Message` history to OpenAI Chat Completions messages.
 ///
 /// The OpenAI API requires that tool calls and their accompanying text live in
 /// *one* assistant message, followed by one `"role":"tool"` message per result.
-/// Pirs stores them as separate `Role::Assistant` + `Role::ToolCall` +
+/// Tau stores them as separate `Role::Assistant` + `Role::ToolCall` +
 /// `Role::ToolResult` messages, interleaved when there are multiple calls in a
 /// single turn.  This function:
 ///

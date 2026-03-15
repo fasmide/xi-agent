@@ -17,7 +17,7 @@ distinct styles (yellow call block, green result block).
 
 ### Multi-provider support
 `OpenAiProvider`, `CopilotProvider`, `CodexProvider`, `OllamaProvider` all
-behind the `LlmProvider` trait. Provider selected via `PIRS_PROVIDER` env
+behind the `LlmProvider` trait. Provider selected via `TAU_PROVIDER` env
 var or `--provider` / `-P` CLI flag.
 
 ### Provider and model configuration
@@ -26,8 +26,8 @@ Active provider and model shown in the Ctrl+I info bar. `/provider` and
 `--model` CLI flags.
 
 ### Config file (initial)
-Optional config file at `$XDG_CONFIG_HOME/pirs/config.toml` (fallback
-`~/.config/pirs/config.toml`) supports default provider and per-provider
+Optional config file at `$XDG_CONFIG_HOME/tau/config.toml` (fallback
+`~/.config/tau/config.toml`) supports default provider and per-provider
 settings (`[openai]`, `[copilot]`, `[codex]`, `[ollama]`). Resolution order:
 CLI flags > env vars > config file > built-in defaults.
 
@@ -42,7 +42,7 @@ CLI flags > env vars > config file > built-in defaults.
 `ThinkingToken` events rendered as dim text above the assistant answer.
 
 ### Session persistence (initial)
-Conversation history is persisted to session files under the pirs data dir,
+Conversation history is persisted to session files under the tau data dir,
 keyed by working folder metadata. `/resume` opens a picker for local + foreign
 sessions, and `Ctrl+R` resumes the latest session for the current folder.
 
@@ -51,14 +51,14 @@ sessions, and `Ctrl+R` resumes the latest session for the current folder.
 ## 🔴 High priority
 
 ### 1. Provider authentication / login redesign
-Current pirs reads subscription credentials from `~/.pi`, which is the wrong
+Current tau reads subscription credentials from `~/.pi`, which is the wrong
 ownership model and effectively reuses another app's tokens. Missing creds also
 cause a poor startup experience.
 
-Redesign auth around a pirs-owned store in a platform-appropriate app config
+Redesign auth around a tau-owned store in a platform-appropriate app config
 location, with **interactive initial authentication** inside the TUI:
 - **Copilot**: GitHub device flow — show verification URL and code, poll in
-  the background, exchange for a Copilot session token, and store in pirs's
+  the background, exchange for a Copilot session token, and store in tau's
   own auth file.
 - **Codex**: browser OAuth + localhost callback only (no manual token/code
   paste path).
@@ -87,8 +87,8 @@ platform credential store:
 - Windows Credential Manager
 - Linux Secret Service / keyring
 
-Keep only non-secret metadata in the pirs app config directory. This improves
-security without coupling pirs back to `~/.pi`.
+Keep only non-secret metadata in the tau app config directory. This improves
+security without coupling tau back to `~/.pi`.
 
 ### 4. Context window management
 Long agentic sessions silently degrade when the conversation history exceeds

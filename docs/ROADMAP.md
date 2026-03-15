@@ -34,6 +34,11 @@ Active provider and model shown in the Ctrl+I info bar. `/provider` and
 ### Thinking output
 `ThinkingToken` events rendered as dim text above the assistant answer.
 
+### Session persistence (initial)
+Conversation history is persisted to session files under the pirs data dir,
+keyed by working folder metadata. `/resume` opens a picker for local + foreign
+sessions, and `Ctrl+R` resumes the latest session for the current folder.
+
 ---
 
 ## 🔴 High priority
@@ -135,6 +140,7 @@ which backend is active without having to discover the keybinding.
 `fetch` tool: HTTP GET a URL, return the response body (plain text or
 truncated HTML). Useful for research tasks.
 
-### 11. Conversation persistence
-Save and restore conversation history across sessions. A simple JSONL log
-per session under `~/.local/share/pirs/` would suffice.
+### 11. Session UX enhancements
+Add richer session management on top of the initial persistence feature:
+search/filter in the session picker, delete/rename sessions, and optional
+preview metadata before loading.

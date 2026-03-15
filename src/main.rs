@@ -19,6 +19,7 @@ mod commands;
 mod debug_log;
 mod llm;
 mod provider;
+mod session;
 mod tool_presentation;
 mod ui;
 
@@ -111,6 +112,7 @@ async fn main() -> io::Result<()> {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_string());
+    app.init_session_persistence(cwd.clone());
     let system_prompt = build_system_prompt(&tools, &cwd);
     app.agent_config.tools = tools;
     app.system_prompt = Some(system_prompt);
@@ -239,6 +241,13 @@ async fn run(
                             continue;
                         }
 
+                        if key.code == KeyCode::Char('r')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            app.resume_latest_for_current_cwd();
+                            continue;
+                        }
+
                         // ── Selection menu mode ───────────────────────────────
                         if app.selection_mode {
                             match key.code {
@@ -254,6 +263,9 @@ async fn run(
                                         }
                                         Some(SelectionResult::LoginProvider(p)) => {
                                             app.start_login(&p);
+                                        }
+                                        Some(SelectionResult::ResumeSession(id)) => {
+                                            app.resume_session_by_id(&id);
                                         }
                                         Some(SelectionResult::AskOption(answer)) => {
                                             app.select_pending_ask_option(answer);
@@ -353,6 +365,12 @@ async fn run(
                                         }
                                         Some(CommandAction::LoginNoArg) => {
                                             app.enter_login_selection_mode();
+                                        }
+                                        Some(CommandAction::Resume(session_id)) => {
+                                            app.resume_session_by_id(&session_id);
+                                        }
+                                        Some(CommandAction::ResumeNoArg) => {
+                                            app.enter_resume_selection_mode();
                                         }
                                         None => {}
                                     }

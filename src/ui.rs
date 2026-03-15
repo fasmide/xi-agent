@@ -87,12 +87,17 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // Info bar: 1 row when show_info is active, 0 otherwise.
     let info_height: u16 = if app.show_info { 1 } else { 0 };
 
-    // Completion popup: one row per matching completion (0 when selection mode
-    // is active, because the two menus are mutually exclusive).
+    // Completion popup: one row per matching completion. When there are no
+    // completions, optionally reserve one row for the Ctrl+R resume hint.
+    let resume_hint_visible = app.should_show_resume_hint();
     let completion_height = if app.selection_mode {
         0
-    } else {
+    } else if !app.completions.is_empty() {
         app.completions.len() as u16
+    } else if resume_hint_visible {
+        1
+    } else {
+        0
     };
 
     // Selection menu: header + capped item list (0 when not in selection mode).
@@ -173,10 +178,23 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         );
     }
 
-    // ── Completion popup ──────────────────────────────────────────────────────
+    // ── Completion popup / resume hint ───────────────────────────────────────
     if completion_height > 0 {
-        let popup_lines = build_completion_lines(&app.completions, app.completion_selected, width);
-        f.render_widget(Paragraph::new(popup_lines), completion_area);
+        if !app.completions.is_empty() {
+            let popup_lines =
+                build_completion_lines(&app.completions, app.completion_selected, width);
+            f.render_widget(Paragraph::new(popup_lines), completion_area);
+        } else if resume_hint_visible {
+            let hint = Line::from(vec![
+                Span::styled("  hint: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Ctrl+R", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    " resumes the latest session for this folder • /resume opens session picker",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            f.render_widget(Paragraph::new(vec![hint]), completion_area);
+        }
     }
 
     // ── Selection menu ────────────────────────────────────────────────────────

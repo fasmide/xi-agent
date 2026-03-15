@@ -35,6 +35,12 @@ pub static COMMANDS: &[SlashCommand] = &[
         takes_arg: true,
     },
     SlashCommand {
+        name: "resume",
+        usage: "/resume",
+        description: "Open session picker and resume a saved conversation",
+        takes_arg: false,
+    },
+    SlashCommand {
         name: "quit",
         usage: "/quit",
         description: "Quit the application",
@@ -185,6 +191,10 @@ pub enum CommandAction {
     Login(String),
     /// `/login` with no argument — show login provider picker.
     LoginNoArg,
+    /// Resume a specific session by id (internal command form).
+    Resume(String),
+    /// `/resume` with no argument — show session picker.
+    ResumeNoArg,
 }
 
 /// Parse a complete slash command input string into an action.
@@ -204,6 +214,8 @@ pub fn parse(input: &str) -> Option<CommandAction> {
         "provider" => Some(CommandAction::ProviderNoArg),
         "login" if !arg.is_empty() => Some(CommandAction::Login(arg.to_string())),
         "login" => Some(CommandAction::LoginNoArg),
+        "resume" if !arg.is_empty() => Some(CommandAction::Resume(arg.to_string())),
+        "resume" => Some(CommandAction::ResumeNoArg),
         _ => None,
     }
 }

@@ -13,6 +13,7 @@ use crate::{
     commands::{self, CompletionItem},
     llm::{LlmProvider, Message, Role},
     provider::ProviderKind,
+    session::SessionStore,
 };
 
 // ── Selection result ──────────────────────────────────────────────────────────
@@ -22,6 +23,7 @@ pub enum SelectionResult {
     Model(String),
     Provider(String),
     LoginProvider(String),
+    ResumeSession(String),
     AskOption(String),
     AskFreeform,
 }
@@ -95,6 +97,12 @@ pub struct App {
     auth_retry_budget: u8,
     login_cancel: Option<Arc<AtomicBool>>,
 
+    // ── Session persistence ───────────────────────────────────────────────────
+    session_store: Option<SessionStore>,
+    current_session_id: Option<String>,
+    current_cwd: String,
+    resume_available_for_cwd: bool,
+
     // ── ask_user overlay state ───────────────────────────────────────────────
     pending_ask: Option<PendingAsk>,
     ask_reply: Option<tokio::sync::oneshot::Sender<AskUserResponse>>,
@@ -158,6 +166,10 @@ impl App {
             retry_after_refresh: false,
             auth_retry_budget: 0,
             login_cancel: None,
+            session_store: None,
+            current_session_id: None,
+            current_cwd: String::new(),
+            resume_available_for_cwd: false,
             pending_ask: None,
             ask_reply: None,
             event_rx,
@@ -178,6 +190,119 @@ impl App {
 
     pub fn ask_request_tx(&self) -> AskRequestTx {
         self.ask_tx.clone()
+    }
+
+    pub fn init_session_persistence(&mut self, cwd: String) {
+        self.current_cwd = cwd;
+        match SessionStore::open() {
+            Ok(store) => {
+                self.session_store = Some(store);
+                self.refresh_resume_availability();
+            }
+            Err(e) => {
+                log::debug!("session persistence disabled: {}", e);
+                self.messages.push(Message::assistant(format!(
+                    "[session persistence unavailable: {e}]"
+                )));
+            }
+        }
+    }
+
+    pub fn should_show_resume_hint(&self) -> bool {
+        self.resume_available_for_cwd
+            && self.messages.is_empty()
+            && !self.selection_mode
+            && !self.login_active
+            && !self.streaming
+    }
+
+    pub fn resume_latest_for_current_cwd(&mut self) {
+        let Some(store) = self.session_store.as_ref() else {
+            return;
+        };
+        let Some(meta) = store.latest_for_cwd(&self.current_cwd) else {
+            self.messages.push(Message::assistant(
+                "[no resumable session in this working folder]",
+            ));
+            return;
+        };
+        self.resume_session_by_id(&meta.id);
+    }
+
+    pub fn resume_session_by_id(&mut self, session_id: &str) {
+        let Some(store) = self.session_store.as_ref() else {
+            return;
+        };
+        match store.load_messages(session_id) {
+            Ok(messages) => {
+                self.messages = messages;
+                self.current_session_id = Some(session_id.to_string());
+                self.auto_scroll = true;
+                self.log_scroll = 0;
+            }
+            Err(e) => {
+                self.messages.push(Message::assistant(format!(
+                    "[failed to resume session: {e}]"
+                )));
+            }
+        }
+        self.refresh_resume_availability();
+    }
+
+    pub fn enter_resume_selection_mode(&mut self) {
+        self.reset_textarea();
+        self.selection_mode = true;
+        self.selection_title = "  Resume session  ";
+        self.selection_selected = 0;
+        self.selection_scroll = 0;
+
+        let Some(store) = self.session_store.as_ref() else {
+            self.selection_items = vec![CompletionItem {
+                label: "session persistence unavailable".to_string(),
+                detail: String::new(),
+                complete_to: String::new(),
+                loading: true,
+            }];
+            return;
+        };
+
+        let mut sessions = store.list_sessions();
+        sessions.sort_by(|a, b| {
+            let a_local = a.cwd == self.current_cwd;
+            let b_local = b.cwd == self.current_cwd;
+            b_local
+                .cmp(&a_local)
+                .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms))
+        });
+
+        if sessions.is_empty() {
+            self.selection_items = vec![CompletionItem {
+                label: "no saved sessions yet".to_string(),
+                detail: String::new(),
+                complete_to: String::new(),
+                loading: true,
+            }];
+            return;
+        }
+
+        self.selection_items = sessions
+            .iter()
+            .map(|meta| {
+                let is_local = meta.cwd == self.current_cwd;
+                let scope = if is_local { "local" } else { "foreign" };
+                let when =
+                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(meta.updated_at_ms)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "unknown time".to_string());
+
+                CompletionItem {
+                    label: format!("[{scope}] {when}  —  {}", meta.id),
+                    detail: format!("{} msgs • {}", meta.message_count, meta.cwd),
+                    complete_to: format!("/resume_session {}", meta.id),
+                    loading: false,
+                }
+            })
+            .collect();
     }
 
     fn make_textarea() -> TextArea<'static> {
@@ -404,6 +529,8 @@ impl App {
             SelectionResult::Model(name.to_string())
         } else if let Some(name) = item.complete_to.strip_prefix("/login ") {
             SelectionResult::LoginProvider(name.to_string())
+        } else if let Some(id) = item.complete_to.strip_prefix("/resume_session ") {
+            SelectionResult::ResumeSession(id.to_string())
         } else if let Some(name) = item.complete_to.strip_prefix("/ask_user_option ") {
             SelectionResult::AskOption(name.to_string())
         } else if item.complete_to == "/ask_user_freeform" {
@@ -457,6 +584,7 @@ impl App {
             );
         }
         self.messages.push(Message::assistant(msg));
+        self.persist_messages();
 
         if options.is_empty() {
             self.exit_selection_mode();
@@ -518,6 +646,7 @@ impl App {
             return;
         }
         self.messages.push(Message::user(answer.clone()));
+        self.persist_messages();
         self.finish_pending_ask(AskUserResponse::Answer(answer));
     }
 
@@ -583,6 +712,7 @@ impl App {
                 self.messages.push(Message::assistant(format!(
                     "[login successful: {provider}]"
                 )));
+                self.persist_messages();
                 self.login_needs_rebuild = true;
             }
             LoginEvent::Error { provider, message } => {
@@ -590,6 +720,7 @@ impl App {
                 self.messages.push(Message::assistant(format!(
                     "[login failed for {provider}: {message}]"
                 )));
+                self.persist_messages();
             }
             LoginEvent::RefreshResult {
                 provider,
@@ -606,12 +737,14 @@ impl App {
                 if success {
                     self.messages
                         .push(Message::assistant(format!("[token refreshed: {provider}]")));
+                    self.persist_messages();
                     self.login_needs_rebuild = true;
                 } else {
                     self.retry_after_refresh = false;
                     self.messages.push(Message::assistant(format!(
                         "[token refresh failed for {provider}: {message}. Run /login {provider}]"
                     )));
+                    self.persist_messages();
                 }
             }
             LoginEvent::Finished => {
@@ -625,11 +758,46 @@ impl App {
 
     // ── Conversation management ───────────────────────────────────────────────
 
+    fn refresh_resume_availability(&mut self) {
+        self.resume_available_for_cwd = self
+            .session_store
+            .as_ref()
+            .and_then(|s| s.latest_for_cwd(&self.current_cwd))
+            .is_some();
+    }
+
+    fn persist_messages(&mut self) {
+        let Some(store) = self.session_store.as_mut() else {
+            return;
+        };
+
+        let session_id = match self.current_session_id.clone() {
+            Some(id) => id,
+            None => match store.create_session(&self.current_cwd) {
+                Ok(id) => {
+                    self.current_session_id = Some(id.clone());
+                    id
+                }
+                Err(e) => {
+                    log::debug!("failed to create session: {}", e);
+                    return;
+                }
+            },
+        };
+
+        if let Err(e) = store.save_messages(&session_id, &self.current_cwd, &self.messages) {
+            log::debug!("failed to persist session {}: {}", session_id, e);
+        }
+        self.refresh_resume_availability();
+    }
+
     /// Clear the conversation history and reset the input area.
     pub fn new_conversation(&mut self) {
         self.messages.clear();
+        self.current_session_id = None;
         self.reset_textarea();
         self.auto_scroll = true;
+        self.refresh_resume_availability();
     }
 
     // ── LLM submission ────────────────────────────────────────────────────────
@@ -644,6 +812,7 @@ impl App {
         }
 
         self.messages.push(Message::user(trimmed));
+        self.persist_messages();
         self.reset_textarea();
         self.auto_scroll = true;
         self.streaming = true;
@@ -689,6 +858,7 @@ impl App {
             && last.content.starts_with("[Error:")
         {
             self.messages.pop();
+            self.persist_messages();
         }
 
         self.streaming = true;
@@ -763,9 +933,12 @@ impl App {
                 self.messages
                     .push(Message::tool_result(&id, result.content, result.is_error));
             }
-            AgentEvent::TurnEnd => {}
+            AgentEvent::TurnEnd => {
+                self.persist_messages();
+            }
             AgentEvent::Done => {
                 self.streaming = false;
+                self.persist_messages();
             }
             AgentEvent::Error(e) => {
                 let is_auth_401 = e.contains(" 401")
@@ -790,6 +963,7 @@ impl App {
                     self.messages
                         .push(Message::assistant(format!("[Error: {e}]")));
                     self.streaming = false;
+                    self.persist_messages();
                 }
             }
         }

@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin};
 
 /// A single message in the conversation history.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: String,
@@ -92,7 +92,7 @@ impl Message {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Role {
     System,
     User,

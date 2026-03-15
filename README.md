@@ -66,6 +66,7 @@ pirs -P ollama -m llama3.2
 | `Page Down`     | Scroll chat to bottom           |
 | `Scroll wheel`  | Scroll chat (3 lines/tick)      |
 | `Ctrl+I`        | Toggle provider/model info bar  |
+| `Ctrl+R`        | Resume latest session for current folder |
 | `Ctrl+C`        | Quit                            |
 | `Esc`           | Quit (or cancel slash command)  |
 
@@ -80,6 +81,7 @@ pirs -P ollama -m llama3.2
 | `/provider <name>`   | Switch provider (copilot / openai / codex / ollama) |
 | `/login`             | Open interactive auth provider picker (copilot / codex) |
 | `/login <provider>`  | Authenticate provider                            |
+| `/resume`            | Open session picker (local + foreign sessions)   |
 | `/quit`              | Quit                                             |
 
 ## Built-in tools

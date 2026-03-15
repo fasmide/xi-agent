@@ -1,9 +1,13 @@
 # AGENTS.md
 
-This is a AI coding assistant hardness writting in Rust.
+This repository is a Rust AI coding assistant harness.
 
 ## General rules
 
-- Fix all warnings before committing
-- Fix all clippy issues (`cargo clippy`) before committing
-- All tests must pass (`cargo test`) before committing
+- Fix all compiler warnings before committing.
+- Fix all clippy issues before committing (`cargo clippy`).
+- Ensure all tests pass before committing (`cargo test`).
+
+## Debugging
+
+- Debug logs are written to `~/.cache/pirs`.

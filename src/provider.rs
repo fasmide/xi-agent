@@ -122,6 +122,12 @@ pub fn context_window_for_model(model: &str) -> Option<usize> {
     None
 }
 
+/// Returns true if the model name identifies a codex model that requires the
+/// Responses API (`/v1/responses`) rather than the chat completions endpoint.
+fn is_codex_model(model: &str) -> bool {
+    model.contains("codex")
+}
+
 /// Build a boxed `LlmProvider` for `kind` with the given model name.
 ///
 /// Returns an error if the required credentials or configuration are missing.
@@ -136,9 +142,21 @@ pub fn build_provider(
             let creds = store.get_copilot().ok_or_else(|| {
                 anyhow::anyhow!("Not authenticated for copilot. Run /login copilot.")
             })?;
-            let p =
-                copilot::from_access_token(&creds.access_token, model, creds.base_url.as_deref());
-            Ok(Arc::new(p))
+            if is_codex_model(model) {
+                let p = copilot::codex_from_access_token(
+                    &creds.access_token,
+                    model,
+                    creds.base_url.as_deref(),
+                );
+                Ok(Arc::new(p))
+            } else {
+                let p = copilot::from_access_token(
+                    &creds.access_token,
+                    model,
+                    creds.base_url.as_deref(),
+                );
+                Ok(Arc::new(p))
+            }
         }
         ProviderKind::OpenAi => {
             let preset = std::env::var("TAU_PRESET").unwrap_or_default();

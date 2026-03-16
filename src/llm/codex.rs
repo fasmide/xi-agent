@@ -9,22 +9,38 @@ pub struct CodexProvider {
     base_url: String,
     model: String,
     api_key: String,
-    account_id: String,
+    extra_headers: Vec<(String, String)>,
     client: reqwest::Client,
 }
 
 impl CodexProvider {
+    /// Create a provider for direct chatgpt.com Codex access (requires account_id).
     pub fn new(
         base_url: impl Into<String>,
         model: impl Into<String>,
         api_key: impl Into<String>,
         account_id: impl Into<String>,
     ) -> Self {
+        let account_id = account_id.into();
+        let extra_headers = vec![
+            ("chatgpt-account-id".to_string(), account_id),
+            ("originator".to_string(), "pi".to_string()),
+        ];
+        Self::new_with_headers(base_url, model, api_key, extra_headers)
+    }
+
+    /// Create a provider with custom extra headers (e.g. for GitHub Copilot proxy).
+    pub fn new_with_headers(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+        extra_headers: Vec<(String, String)>,
+    ) -> Self {
         Self {
             base_url: base_url.into(),
             model: model.into(),
             api_key: api_key.into(),
-            account_id: account_id.into(),
+            extra_headers,
             client: reqwest::Client::new(),
         }
     }
@@ -33,7 +49,7 @@ impl CodexProvider {
         let url = resolve_codex_url(&self.base_url);
         let model = self.model.clone();
         let api_key = self.api_key.clone();
-        let account_id = self.account_id.clone();
+        let extra_headers = self.extra_headers.clone();
         let client = self.client.clone();
 
         Box::pin(async_stream::stream! {
@@ -68,15 +84,17 @@ impl CodexProvider {
                 serde_json::to_string_pretty(&body).unwrap_or_default()
             );
 
-            let response = match client
+            let mut req = client
                 .post(&url)
                 .header("Authorization", format!("Bearer {api_key}"))
-                .header("chatgpt-account-id", &account_id)
-                .header("originator", "pi")
                 .header("OpenAI-Beta", "responses=experimental")
                 .header("accept", "text/event-stream")
                 .header("content-type", "application/json")
-                .json(&body)
+                .json(&body);
+            for (k, v) in &extra_headers {
+                req = req.header(k.as_str(), v.as_str());
+            }
+            let response = match req
                 .send()
                 .await
                 .map_err(|e| format!("Failed to connect to Codex at {url}: {e}"))
@@ -249,7 +267,8 @@ impl CodexProvider {
 
 fn resolve_codex_url(base_url: &str) -> String {
     let normalized = base_url.trim_end_matches('/');
-    if normalized.ends_with("/codex/responses") {
+    if normalized.ends_with("/responses") {
+        // Already a complete responses URL (e.g. .../v1/responses or .../codex/responses)
         normalized.to_string()
     } else if normalized.ends_with("/codex") {
         format!("{normalized}/responses")

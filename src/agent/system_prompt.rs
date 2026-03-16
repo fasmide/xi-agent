@@ -1,14 +1,15 @@
 use chrono::Local;
 
 use crate::agent::types::ToolRegistry;
+use crate::skills::SkillMeta;
 
 /// Build the default system prompt for the agent loop.
 ///
 /// Mirrors pi-mono's `buildSystemPrompt`: declares the agent's identity,
 /// lists available tools with their descriptions, adds tool-use guidelines,
-/// and stamps the current date and working directory so the model has
-/// accurate context.
-pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str) -> String {
+/// stamps the current date and working directory, and optionally appends an
+/// `<available_skills>` block when skill files are present.
+pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str, skills: &[SkillMeta]) -> String {
     let date = Local::now().format("%Y-%m-%d").to_string();
 
     // Build tool list sorted by name for deterministic output.
@@ -60,6 +61,8 @@ pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let skills_section = render_skills_block(skills);
+
     format!(
         "You are an expert coding assistant and autonomous agent. \
 You help users by reading files, executing commands, editing code, and writing new files. \
@@ -72,7 +75,37 @@ Guidelines:\n\
 {guidelines_text}\n\
 \n\
 Current date: {date}\n\
-Current working directory: {cwd}"
+Current working directory: {cwd}{skills_section}"
+    )
+}
+
+/// Render the `<available_skills>` prompt block from a slice of skill metadata.
+/// Returns an empty string when `skills` is empty.
+fn render_skills_block(skills: &[SkillMeta]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+
+    let entries: String = skills
+        .iter()
+        .map(|s| {
+            format!(
+                "  <skill>\n    <name>{}</name>\n    <description>{}</description>\n    <location>{}</location>\n  </skill>",
+                s.name,
+                s.description,
+                s.path.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "\n\nThe following skills provide specialized instructions for specific tasks.\n\
+Use the read tool to load a skill's file when the task matches its description.\n\
+When a skill file references a relative path, resolve it against the skill directory \
+(parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\
+\n\
+<available_skills>\n{entries}\n</available_skills>"
     )
 }
 

@@ -14,6 +14,7 @@ use crate::{
     llm::{LlmProvider, Message, Role},
     provider::ProviderKind,
     session::SessionStore,
+    skills::SkillMeta,
 };
 
 // ── Selection result ──────────────────────────────────────────────────────────
@@ -55,6 +56,8 @@ pub struct App {
     pub current_provider: String,
     /// Agent loop configuration (tools, hooks, max_turns).
     pub agent_config: AgentLoopConfig,
+    /// Skills loaded from the user's skills directory.
+    pub loaded_skills: Vec<SkillMeta>,
 
     // ── Completion popup ──────────────────────────────────────────────────────
     /// Items to display in the completion popup (empty = popup hidden).
@@ -150,6 +153,7 @@ impl App {
             current_model: initial_model.into(),
             current_provider: initial_provider.name().to_string(),
             agent_config,
+            loaded_skills: Vec::new(),
             completions: Vec::new(),
             completion_selected: 0,
             available_models: None,
@@ -341,7 +345,7 @@ impl App {
         };
         let available = self.available_models.as_deref();
         let loading = self.models_loading;
-        let new = commands::completions_for(&input, available, loading);
+        let new = commands::completions_for(&input, available, loading, &self.loaded_skills);
 
         if new.len() != self.completions.len() {
             self.completion_selected = 0;
@@ -838,6 +842,43 @@ impl App {
         {
             llm_messages.pop();
         }
+
+        let config = AgentLoopConfig {
+            tools: self.agent_config.tools.clone(),
+            before_tool_call: None,
+            after_tool_call: None,
+            max_turns: self.agent_config.max_turns,
+        };
+
+        let provider = Arc::clone(provider);
+        let tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            run_agent_loop(llm_messages, config, provider, tx).await;
+        });
+    }
+
+    /// Submit a pre-built text string directly to the agent loop, bypassing the
+    /// textarea.  Used by `/skill:<name>` command expansion.
+    pub fn submit_with_text(&mut self, text: String, provider: &DynProvider) {
+        if text.trim().is_empty() || self.streaming || self.login_active {
+            return;
+        }
+
+        let mut msg = Message::user(text.trim());
+        msg.hidden = true;
+        self.messages.push(msg);
+        self.persist_messages();
+        self.reset_textarea();
+        self.auto_scroll = true;
+        self.streaming = true;
+        self.auth_retry_budget = 1;
+
+        let llm_messages: Vec<Message> = self
+            .system_prompt
+            .iter()
+            .map(Message::system)
+            .chain(self.messages.iter().cloned())
+            .collect();
 
         let config = AgentLoopConfig {
             tools: self.agent_config.tools.clone(),

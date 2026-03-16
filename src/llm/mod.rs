@@ -8,6 +8,10 @@ pub struct Message {
     /// Chain-of-thought / "thinking" content emitted before the answer.
     /// `None` for messages that carry no thinking output.
     pub thinking: Option<String>,
+    /// When true, this message is sent to the LLM and persisted in the session
+    /// but is not rendered in the chat log UI.
+    #[serde(default)]
+    pub hidden: bool,
     // ── Tool-call fields (Role::ToolCall) ─────────────────────────────────────
     /// Opaque identifier linking a tool call to its result.
     pub tool_call_id: Option<String>,
@@ -26,6 +30,7 @@ impl Message {
             role: Role::User,
             content: content.into(),
             thinking: None,
+            hidden: false,
             tool_call_id: None,
             tool_name: None,
             tool_args: None,
@@ -38,6 +43,7 @@ impl Message {
             role: Role::Assistant,
             content: content.into(),
             thinking: None,
+            hidden: false,
             tool_call_id: None,
             tool_name: None,
             tool_args: None,
@@ -50,6 +56,7 @@ impl Message {
             role: Role::System,
             content: content.into(),
             thinking: None,
+            hidden: false,
             tool_call_id: None,
             tool_name: None,
             tool_args: None,
@@ -67,6 +74,7 @@ impl Message {
             role: Role::ToolCall,
             content: String::new(),
             thinking: None,
+            hidden: false,
             tool_call_id: Some(id.into()),
             tool_name: Some(name.into()),
             tool_args: Some(args),
@@ -84,6 +92,7 @@ impl Message {
             role: Role::ToolResult,
             content: content.into(),
             thinking: None,
+            hidden: false,
             tool_call_id: Some(call_id.into()),
             tool_name: None,
             tool_args: None,

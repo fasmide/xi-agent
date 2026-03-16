@@ -21,6 +21,7 @@ mod debug_log;
 mod llm;
 mod provider;
 mod session;
+mod skills;
 mod tool_presentation;
 mod ui;
 
@@ -114,9 +115,11 @@ async fn main() -> io::Result<()> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_string());
     app.init_session_persistence(cwd.clone());
-    let system_prompt = build_system_prompt(&tools, &cwd);
+    let loaded_skills = skills::load_skills();
+    let system_prompt = build_system_prompt(&tools, &cwd, &loaded_skills);
     app.agent_config.tools = tools;
     app.system_prompt = Some(system_prompt);
+    app.loaded_skills = loaded_skills;
 
     loop {
         // Build (or re-build) the provider for the current kind + model.
@@ -404,6 +407,27 @@ async fn run(
                                         Some(CommandAction::ResumeNoArg) => {
                                             app.enter_resume_selection_mode();
                                         }
+                                        Some(CommandAction::Skill { name, args }) => {
+                                            match app.loaded_skills.iter().find(|s| s.name == name) {
+                                                Some(skill) => {
+                                                    match skills::expand_skill(skill, &args) {
+                                                        Ok(expanded) => {
+                                                            app.submit_with_text(expanded, provider);
+                                                        }
+                                                        Err(e) => {
+                                                            app.messages.push(llm::Message::assistant(
+                                                                format!("[skill error: {e}]"),
+                                                            ));
+                                                        }
+                                                    }
+                                                }
+                                                None => {
+                                                    app.messages.push(llm::Message::assistant(
+                                                        format!("[unknown skill: '{name}']"),
+                                                    ));
+                                                }
+                                            }
+                                        }
                                         None => {}
                                     }
                                 } else {
@@ -529,7 +553,8 @@ async fn run_print_mode(
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| ".".to_string());
-    let system_prompt = build_system_prompt(&tools, &cwd);
+    let loaded_skills = skills::load_skills();
+    let system_prompt = build_system_prompt(&tools, &cwd, &loaded_skills);
 
     let messages: Vec<Message> = vec![Message::system(&system_prompt), Message::user(&prompt)];
 

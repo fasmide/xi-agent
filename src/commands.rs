@@ -1,3 +1,5 @@
+use crate::skills::SkillMeta;
+
 /// A slash command supported by the application.
 pub struct SlashCommand {
     pub name: &'static str,
@@ -95,6 +97,16 @@ impl CompletionItem {
         }
     }
 
+    fn from_skill(skill: &SkillMeta) -> Self {
+        Self {
+            label: format!("/skill:{}", skill.name),
+            detail: skill.description.clone(),
+            // Trailing space lets the user optionally append args.
+            complete_to: format!("/skill:{} ", skill.name),
+            loading: false,
+        }
+    }
+
     pub(crate) fn loading_indicator() -> Self {
         Self {
             label: "fetching models…".to_string(),
@@ -109,7 +121,8 @@ impl CompletionItem {
 
 /// Build the completion list for the current textarea `input`.
 ///
-/// **Phase 1 — command name** (no space yet): filter `COMMANDS` by prefix.
+/// **Phase 1 — command name** (no space yet): filter `COMMANDS` + available
+/// skills by prefix.  Skills are listed as `/skill:<name>` entries.
 /// **Phase 2 — argument** (space present after `/model` or `/provider`): filter
 /// available model / provider names by the typed prefix, or show a loading
 /// indicator while the model list is being fetched.
@@ -117,6 +130,7 @@ pub fn completions_for(
     input: &str,
     available_models: Option<&[String]>,
     models_loading: bool,
+    skills: &[SkillMeta],
 ) -> Vec<CompletionItem> {
     use crate::provider::ProviderKind;
 
@@ -129,6 +143,11 @@ pub fn completions_for(
         Some(space_pos) => {
             let cmd = &rest[..space_pos];
             let arg = rest[space_pos + 1..].trim_start();
+
+            if cmd.starts_with("skill:") {
+                // `/skill:<name> <args>` — no completions for free-form args.
+                return vec![];
+            }
 
             match cmd {
                 "model" => {
@@ -165,11 +184,43 @@ pub fn completions_for(
             }
         }
         // ── Phase 1: command name ─────────────────────────────────────────────
-        None => COMMANDS
-            .iter()
-            .filter(|c| c.name.starts_with(rest))
-            .map(CompletionItem::from_command)
-            .collect(),
+        None => {
+            if let Some(skill_prefix) = rest.strip_prefix("skill:") {
+                // User is typing `/skill:<name>` — only show skill completions.
+                skills
+                    .iter()
+                    .filter(|s| s.name.starts_with(skill_prefix))
+                    .map(CompletionItem::from_skill)
+                    .collect()
+            } else {
+                // General command name filtering: built-in commands + skills.
+                let mut items: Vec<CompletionItem> = COMMANDS
+                    .iter()
+                    .filter(|c| c.name.starts_with(rest))
+                    .map(CompletionItem::from_command)
+                    .collect();
+
+                // Include skills whose `/skill:<name>` form matches the prefix.
+                // e.g. typing `/s` or `/sk` shows skill entries alongside commands.
+                let full_prefix = format!("skill:{}", rest);
+                // Alternatively check if `skill:` starts with `rest` (partial match).
+                if "skill:".starts_with(rest) || rest.starts_with("skill:") {
+                    for skill in skills {
+                        items.push(CompletionItem::from_skill(skill));
+                    }
+                } else {
+                    // Check each skill name with the full prefix
+                    for skill in skills {
+                        if format!("skill:{}", skill.name).starts_with(rest) {
+                            items.push(CompletionItem::from_skill(skill));
+                        }
+                    }
+                    let _ = full_prefix; // already handled above
+                }
+
+                items
+            }
+        }
     }
 }
 
@@ -195,6 +246,8 @@ pub enum CommandAction {
     Resume(String),
     /// `/resume` with no argument — show session picker.
     ResumeNoArg,
+    /// Invoke a skill by name, with optional free-form args.
+    Skill { name: String, args: String },
 }
 
 /// Parse a complete slash command input string into an action.
@@ -205,6 +258,18 @@ pub fn parse(input: &str) -> Option<CommandAction> {
         Some(pos) => (&rest[..pos], rest[pos + 1..].trim()),
         None => (rest, ""),
     };
+
+    // `/skill:<name>` — name and args separated by a space.
+    if let Some(skill_name) = name.strip_prefix("skill:") {
+        if !skill_name.is_empty() {
+            return Some(CommandAction::Skill {
+                name: skill_name.to_string(),
+                args: arg.to_string(),
+            });
+        }
+        return None;
+    }
+
     match name {
         "new" => Some(CommandAction::New),
         "quit" => Some(CommandAction::Quit),

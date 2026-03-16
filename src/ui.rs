@@ -557,6 +557,9 @@ fn build_log_lines(
 
         match msg.role {
             Role::User => {
+                if msg.hidden {
+                    continue;
+                }
                 append_message(&mut lines, &msg.content, "", width, true);
             }
             Role::System => {

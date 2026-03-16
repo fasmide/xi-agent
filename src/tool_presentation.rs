@@ -6,7 +6,7 @@ pub fn tool_emoji(name: &str) -> &'static str {
         "read" | "read_file" => "👀",
         "write" | "write_file" => "✍️",
         "edit" | "edit_file" => "📝",
-        "bash" => "💻",
+        "bash" | "cmd" | "powershell" => "💻",
         "find" | "find_files" => "🔍",
         "ask_user" => "❓",
         _ => "⚙️",

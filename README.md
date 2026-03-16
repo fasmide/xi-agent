@@ -130,16 +130,18 @@ Environment variables:
 
 ## Built-in tools
 
-The agent has access to five tools out of the box:
+The agent has built-in tools out of the box:
 
-| Tool        | Emoji | Description                                      |
-|-------------|-------|--------------------------------------------------|
-| `read_file` | 👀    | Read a file (with optional offset/limit)         |
-| `write`     | ✍️    | Write or overwrite a file                        |
-| `edit`      | 📝    | Replace exact text in a file                     |
-| `bash`      | 💻    | Run a shell command, return stdout/stderr         |
-| `find`      | 🔍    | Search files by name glob or content pattern     |
-| `ask_user`  | ❓    | Ask the user a question and wait for an answer   |
+| Tool          | Emoji | Description                                       |
+|---------------|-------|---------------------------------------------------|
+| `read_file`   | 👀    | Read a file (with optional offset/limit)          |
+| `write`       | ✍️    | Write or overwrite a file                         |
+| `edit`        | 📝    | Replace exact text in a file                      |
+| `find_files`  | 🔍    | Search files by name glob or content pattern      |
+| `ask_user`    | ❓    | Ask the user a question and wait for an answer    |
+| `bash`        | 💻    | Run shell commands (non-Windows)                  |
+| `powershell`  | 💻    | Run PowerShell commands (Windows)                 |
+| `cmd`         | 💻    | Run `cmd.exe /C` commands (Windows)               |
 
 ## Non-interactive mode
 

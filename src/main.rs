@@ -297,7 +297,15 @@ async fn run(
                         if key.code == KeyCode::Char('d')
                             && key.modifiers.contains(KeyModifiers::CONTROL)
                         {
-                            return Ok(RunResult::Quit);
+                            let input_is_empty = app
+                                .textarea
+                                .lines()
+                                .iter()
+                                .all(|line| line.trim().is_empty());
+                            if input_is_empty {
+                                return Ok(RunResult::Quit);
+                            }
+                            continue;
                         }
 
                         if key.code == KeyCode::Char('i')

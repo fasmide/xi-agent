@@ -294,6 +294,12 @@ async fn run(
                             return Ok(RunResult::Quit);
                         }
 
+                        if key.code == KeyCode::Char('d')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            return Ok(RunResult::Quit);
+                        }
+
                         if key.code == KeyCode::Char('i')
                             && key.modifiers.contains(KeyModifiers::CONTROL)
                         {

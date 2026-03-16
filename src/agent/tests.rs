@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use futures_util::stream;
 use tokio::sync::mpsc;
 
-use crate::agent::{run_agent_loop, AgentLoopConfig};
 use crate::agent::types::AgentEvent;
+use crate::agent::{AgentLoopConfig, run_agent_loop};
 use crate::llm::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ToolDefinition};
 
 // ── MockProvider ──────────────────────────────────────────────────────────────
@@ -34,12 +34,7 @@ impl LlmProvider for MockProvider {
         _messages: Vec<Message>,
         _tools: Vec<ToolDefinition>,
     ) -> LlmStream {
-        let events = self
-            .turns
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_default();
+        let events = self.turns.lock().unwrap().pop_front().unwrap_or_default();
         Box::pin(stream::iter(events))
     }
 
@@ -184,10 +179,13 @@ async fn agent_loop_before_hook_blocks_tool() {
         events.push(ev);
     }
 
-    let has_blocked_result = events.iter().any(|ev| {
-        matches!(ev, AgentEvent::ToolCallEnd { result, .. } if result.is_error)
-    });
-    assert!(has_blocked_result, "expected a blocked (is_error) ToolCallEnd");
+    let has_blocked_result = events
+        .iter()
+        .any(|ev| matches!(ev, AgentEvent::ToolCallEnd { result, .. } if result.is_error));
+    assert!(
+        has_blocked_result,
+        "expected a blocked (is_error) ToolCallEnd"
+    );
 
     // Loop should still complete (not hang or error out).
     assert!(

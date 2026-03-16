@@ -56,7 +56,7 @@ pub struct App {
     pub current_provider: String,
     /// Agent loop configuration (tools, hooks, max_turns).
     pub agent_config: AgentLoopConfig,
-    /// Skills loaded from the user's skills directory.
+    /// Skills loaded from all supported skill roots.
     pub loaded_skills: Vec<SkillMeta>,
 
     // ── Completion popup ──────────────────────────────────────────────────────

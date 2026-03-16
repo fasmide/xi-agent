@@ -194,7 +194,11 @@ async fn main() -> io::Result<()> {
     if keyboard_enhancements_enabled {
         execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
     }
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     Ok(())
@@ -251,9 +255,7 @@ async fn run(
         // about OSC 8, so we inject the escape sequence directly into stdout.
         // Because Ratatui's differential renderer only redraws changed cells,
         // the OSC 8 state persists across frames where the URL row is static.
-        if let (Some((row, col)), Some(url)) =
-            (app.login_url_link_pos, &app.login_url)
-        {
+        if let (Some((row, col)), Some(url)) = (app.login_url_link_pos, &app.login_url) {
             use crossterm::style::Print;
             let seq = format!(
                 "\x1b]8;;{url}\x1b\\{label}\x1b]8;;\x1b\\",

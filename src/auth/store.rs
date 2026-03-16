@@ -174,7 +174,9 @@ mod tests {
         store.save().unwrap();
 
         let store2 = AuthStore::load(&path).unwrap();
-        let got = store2.get_copilot().expect("copilot creds should be present");
+        let got = store2
+            .get_copilot()
+            .expect("copilot creds should be present");
         assert_eq!(got.access_token, "at_copilot");
         assert_eq!(got.refresh_token, "rt_copilot");
         assert_eq!(got.expires_at, 9_999_999_999);

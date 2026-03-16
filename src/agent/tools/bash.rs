@@ -109,7 +109,11 @@ mod tests {
         let args = serde_json::json!({"command": "echo hello"});
         let result = tool.execute(args).await;
         assert!(!result.is_error);
-        assert!(result.content.contains("hello"), "stdout not captured: {}", result.content);
+        assert!(
+            result.content.contains("hello"),
+            "stdout not captured: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -118,7 +122,11 @@ mod tests {
         let args = serde_json::json!({"command": "echo oops >&2"});
         let result = tool.execute(args).await;
         assert!(!result.is_error);
-        assert!(result.content.contains("oops"), "stderr not captured: {}", result.content);
+        assert!(
+            result.content.contains("oops"),
+            "stderr not captured: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -128,7 +136,11 @@ mod tests {
         let result = tool.execute(args).await;
         // is_error stays false; the exit code is embedded in the content
         assert!(!result.is_error);
-        assert!(result.content.contains("exit 42"), "exit code not in output: {}", result.content);
+        assert!(
+            result.content.contains("exit 42"),
+            "exit code not in output: {}",
+            result.content
+        );
     }
 
     #[tokio::test]

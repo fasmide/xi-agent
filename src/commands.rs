@@ -247,7 +247,10 @@ pub enum CommandAction {
     /// `/resume` with no argument — show session picker.
     ResumeNoArg,
     /// Invoke a skill by name, with optional free-form args.
-    Skill { name: String, args: String },
+    Skill {
+        name: String,
+        args: String,
+    },
 }
 
 /// Parse a complete slash command input string into an action.

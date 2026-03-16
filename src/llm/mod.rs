@@ -284,7 +284,11 @@ mod tests {
 
     #[test]
     fn message_round_trips_through_json() {
-        let original = Message::tool_call("call-42", "read_file", serde_json::json!({"path": "/etc/hosts"}));
+        let original = Message::tool_call(
+            "call-42",
+            "read_file",
+            serde_json::json!({"path": "/etc/hosts"}),
+        );
         let json = serde_json::to_string(&original).unwrap();
         let decoded: Message = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.role, original.role);

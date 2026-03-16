@@ -147,29 +147,29 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),                            // 0: chat log
-            Constraint::Length(completion_height),         // 1: completion popup
-            Constraint::Length(selection_header_height),   // 2: selection header
-            Constraint::Length(selection_items_height),    // 3: selection items
-            Constraint::Length(login_header_height),       // 4: login header
-            Constraint::Length(login_content_height),      // 5: login content
-            Constraint::Length(hb_height),                 // 6: ▄ top edge
-            Constraint::Length(effective_input_height),    // 7: input textarea
-            Constraint::Length(hb_height),                 // 8: ▀ bottom edge
-            Constraint::Length(info_height),               // 9: info bar
+            Constraint::Min(1),                          // 0: chat log
+            Constraint::Length(completion_height),       // 1: completion popup
+            Constraint::Length(selection_header_height), // 2: selection header
+            Constraint::Length(selection_items_height),  // 3: selection items
+            Constraint::Length(login_header_height),     // 4: login header
+            Constraint::Length(login_content_height),    // 5: login content
+            Constraint::Length(hb_height),               // 6: ▄ top edge
+            Constraint::Length(effective_input_height),  // 7: input textarea
+            Constraint::Length(hb_height),               // 8: ▀ bottom edge
+            Constraint::Length(info_height),             // 9: info bar
         ])
         .split(f.area());
 
-    let log_area        = chunks[0];
+    let log_area = chunks[0];
     let completion_area = chunks[1];
     let sel_header_area = chunks[2];
-    let sel_items_area  = chunks[3];
-    let login_hdr_area  = chunks[4];
+    let sel_items_area = chunks[3];
+    let login_hdr_area = chunks[4];
     let login_body_area = chunks[5];
-    let top_hb_area     = chunks[6];
-    let input_area      = chunks[7];
-    let bot_hb_area     = chunks[8];
-    let info_area       = chunks[9];
+    let top_hb_area = chunks[6];
+    let input_area = chunks[7];
+    let bot_hb_area = chunks[8];
+    let info_area = chunks[9];
 
     // ── Chat log ──────────────────────────────────────────────────────────────
     let inner_height = log_area.height as usize;
@@ -353,12 +353,22 @@ const LOGIN_LINK_COL: u16 = 7;
 /// Also records the terminal position of the URL link label in
 /// `app.login_url_link_pos` so the main loop can overlay OSC 8 escape codes
 /// after the Ratatui frame is flushed.
-fn build_login_content_lines(app: &mut App, login_body_top: u16, width: usize) -> Vec<Line<'static>> {
+fn build_login_content_lines(
+    app: &mut App,
+    login_body_top: u16,
+    width: usize,
+) -> Vec<Line<'static>> {
     let status_style = Style::default().fg(Color::White).bg(LOGIN_CONTENT_BG);
-    let url_key_style = Style::default().fg(Color::Rgb(120, 200, 255)).bg(LOGIN_CONTENT_BG);
-    let url_val_style = Style::default().fg(Color::Rgb(100, 220, 100)).bg(LOGIN_CONTENT_BG)
+    let url_key_style = Style::default()
+        .fg(Color::Rgb(120, 200, 255))
+        .bg(LOGIN_CONTENT_BG);
+    let url_val_style = Style::default()
+        .fg(Color::Rgb(100, 220, 100))
+        .bg(LOGIN_CONTENT_BG)
         .add_modifier(ratatui::style::Modifier::UNDERLINED);
-    let code_key_style = Style::default().fg(Color::Rgb(120, 200, 255)).bg(LOGIN_CONTENT_BG);
+    let code_key_style = Style::default()
+        .fg(Color::Rgb(120, 200, 255))
+        .bg(LOGIN_CONTENT_BG);
     let code_val_style = Style::default().fg(Color::Yellow).bg(LOGIN_CONTENT_BG);
     let fill_style = Style::default().bg(LOGIN_CONTENT_BG);
     let fill = |used: usize| Span::styled(" ".repeat(width.saturating_sub(used)), fill_style);
@@ -810,7 +820,11 @@ mod tests {
     fn wrap_str_splits_at_width() {
         // "hello world" at width 5 should produce at least two chunks.
         let chunks = wrap_str("hello world", 5);
-        assert!(chunks.len() >= 2, "expected at least 2 chunks, got: {:?}", chunks);
+        assert!(
+            chunks.len() >= 2,
+            "expected at least 2 chunks, got: {:?}",
+            chunks
+        );
     }
 
     #[test]

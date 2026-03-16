@@ -1,4 +1,8 @@
-use std::{env, fs, path::PathBuf};
+use std::{
+    collections::HashSet,
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 /// Metadata parsed from the YAML frontmatter of a `SKILL.md` file.
 #[derive(Debug, Clone)]
@@ -11,47 +15,77 @@ pub struct SkillMeta {
     pub base_dir: PathBuf,
 }
 
-/// Scan `$XDG_CONFIG_HOME/tau/skills/` (or `~/.config/tau/skills/`) for
-/// subdirectories that contain a `SKILL.md` with YAML frontmatter.
+/// Scan all supported skill roots for subdirectories that contain a
+/// `SKILL.md` with YAML frontmatter.
 ///
-/// Returns an empty vec when the directory does not exist or cannot be read.
+/// Skill roots:
+/// - `~/.tau/skills`
+/// - `~/.agents/skills`
+/// - `./.agents/skills`
+/// - `./.tau/skills`
+///
+/// Returns an empty vec when no skill roots exist or are readable.
 pub fn load_skills() -> Vec<SkillMeta> {
-    let Some(dir) = skills_dir() else {
-        return vec![];
-    };
+    load_skills_from_dirs(skill_dirs())
+}
+
+fn skill_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(home) = env::var_os("HOME").filter(|s| !s.is_empty()) {
+        let home = PathBuf::from(home);
+        dirs.push(home.join(".tau").join("skills"));
+        dirs.push(home.join(".agents").join("skills"));
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        dirs.push(cwd.join(".agents").join("skills"));
+        dirs.push(cwd.join(".tau").join("skills"));
+    }
+
+    dirs
+}
+
+fn load_skills_from_dirs(dirs: Vec<PathBuf>) -> Vec<SkillMeta> {
+    let mut seen_files: HashSet<PathBuf> = HashSet::new();
+    let mut skills: Vec<SkillMeta> = Vec::new();
+
+    for dir in dirs {
+        skills.extend(load_skills_from_dir(&dir, &mut seen_files));
+    }
+
+    // Deterministic order.
+    skills.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.path.cmp(&b.path)));
+    skills
+}
+
+fn load_skills_from_dir(dir: &Path, seen_files: &mut HashSet<PathBuf>) -> Vec<SkillMeta> {
     if !dir.exists() {
         return vec![];
     }
 
-    let Ok(entries) = fs::read_dir(&dir) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return vec![];
     };
 
-    let mut skills: Vec<SkillMeta> = entries
+    entries
         .flatten()
         .filter_map(|entry| {
             let path = entry.path();
             if !path.is_dir() {
                 return None;
             }
+
             let skill_file = path.join("SKILL.md");
+            let canonical = skill_file.canonicalize().unwrap_or(skill_file.clone());
+            if !seen_files.insert(canonical) {
+                return None;
+            }
+
             let content = fs::read_to_string(&skill_file).ok()?;
             parse_skill_meta(&content, skill_file)
         })
-        .collect();
-
-    // Deterministic order.
-    skills.sort_by(|a, b| a.name.cmp(&b.name));
-    skills
-}
-
-fn skills_dir() -> Option<PathBuf> {
-    if let Some(xdg) = env::var_os("XDG_CONFIG_HOME").filter(|s| !s.is_empty()) {
-        return Some(PathBuf::from(xdg).join("tau").join("skills"));
-    }
-    env::var_os("HOME")
-        .filter(|s| !s.is_empty())
-        .map(|h| PathBuf::from(h).join(".config").join("tau").join("skills"))
+        .collect()
 }
 
 /// Parse `name` and `description` from the YAML frontmatter block (`---` … `---`)
@@ -78,10 +112,7 @@ fn parse_skill_meta(content: &str, path: PathBuf) -> Option<SkillMeta> {
         }
     }
 
-    let base_dir = path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_default();
+    let base_dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
 
     Some(SkillMeta {
         name: name?,
@@ -164,7 +195,7 @@ fn strip_frontmatter(content: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_skill, parse_skill_meta, strip_frontmatter};
+    use super::{expand_skill, load_skills_from_dirs, parse_skill_meta, strip_frontmatter};
     use std::path::PathBuf;
 
     fn dummy_path() -> PathBuf {
@@ -225,13 +256,14 @@ description: guides most non-trivial coding work.
         std::fs::create_dir_all(&skill_dir).unwrap();
         let path = skill_dir.join("SKILL.md");
         let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(f, "---\nname: my-skill\ndescription: test.\n---\n\n# My skill\nDo the thing.").unwrap();
-
-        let meta = parse_skill_meta(
-            &std::fs::read_to_string(&path).unwrap(),
-            path.clone(),
+        writeln!(
+            f,
+            "---\nname: my-skill\ndescription: test.\n---\n\n# My skill\nDo the thing."
         )
         .unwrap();
+
+        let meta =
+            parse_skill_meta(&std::fs::read_to_string(&path).unwrap(), path.clone()).unwrap();
 
         let expanded = expand_skill(&meta, "").unwrap();
         assert!(expanded.contains("<skill name=\"my-skill\""));
@@ -250,13 +282,46 @@ description: guides most non-trivial coding work.
         let mut f = std::fs::File::create(&path).unwrap();
         writeln!(f, "---\nname: my-skill\ndescription: test.\n---\n\n# Body").unwrap();
 
-        let meta = parse_skill_meta(
-            &std::fs::read_to_string(&path).unwrap(),
-            path.clone(),
-        )
-        .unwrap();
+        let meta =
+            parse_skill_meta(&std::fs::read_to_string(&path).unwrap(), path.clone()).unwrap();
 
         let expanded = expand_skill(&meta, "implement the feature").unwrap();
         assert!(expanded.ends_with("\n\nimplement the feature"));
+    }
+
+    #[test]
+    fn load_skills_merges_all_roots() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root_a = dir.path().join("a");
+        let root_b = dir.path().join("b");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+
+        let skill_a_dir = root_a.join("skill-a");
+        std::fs::create_dir_all(&skill_a_dir).unwrap();
+        let skill_a = skill_a_dir.join("SKILL.md");
+        let mut file_a = std::fs::File::create(&skill_a).unwrap();
+        writeln!(
+            file_a,
+            "---\nname: skill-a\ndescription: from root a\n---\n"
+        )
+        .unwrap();
+
+        let skill_b_dir = root_b.join("skill-b");
+        std::fs::create_dir_all(&skill_b_dir).unwrap();
+        let skill_b = skill_b_dir.join("SKILL.md");
+        let mut file_b = std::fs::File::create(&skill_b).unwrap();
+        writeln!(
+            file_b,
+            "---\nname: skill-b\ndescription: from root b\n---\n"
+        )
+        .unwrap();
+
+        let skills = load_skills_from_dirs(vec![root_a.clone(), root_b.clone()]);
+        assert_eq!(skills.len(), 2);
+        assert!(skills.iter().any(|s| s.name == "skill-a"));
+        assert!(skills.iter().any(|s| s.name == "skill-b"));
     }
 }

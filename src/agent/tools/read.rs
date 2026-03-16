@@ -123,10 +123,26 @@ mod tests {
         let result = tool.execute(args).await;
         assert!(!result.is_error);
         // Should contain lines 2-3 (b, c) but not a or e
-        assert!(result.content.contains('b'), "missing b: {}", result.content);
-        assert!(result.content.contains('c'), "missing c: {}", result.content);
-        assert!(!result.content.contains("\na\n") && !result.content.starts_with("a"), "should not contain line a: {}", result.content);
-        assert!(!result.content.contains("\ne\n") && !result.content.ends_with("\ne"), "should not contain line e: {}", result.content);
+        assert!(
+            result.content.contains('b'),
+            "missing b: {}",
+            result.content
+        );
+        assert!(
+            result.content.contains('c'),
+            "missing c: {}",
+            result.content
+        );
+        assert!(
+            !result.content.contains("\na\n") && !result.content.starts_with("a"),
+            "should not contain line a: {}",
+            result.content
+        );
+        assert!(
+            !result.content.contains("\ne\n") && !result.content.ends_with("\ne"),
+            "should not contain line e: {}",
+            result.content
+        );
     }
 
     #[tokio::test]

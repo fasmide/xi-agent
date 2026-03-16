@@ -193,3 +193,74 @@ async fn agent_loop_before_hook_blocks_tool() {
         "expected Done after blocked tool call"
     );
 }
+
+#[test]
+fn test_read_agents_md() {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    // Create a temporary directory structure.
+    let temp_home = tempdir().unwrap();
+    let home_path = temp_home.path();
+    let temp_working = tempdir().unwrap();
+    let working_path = temp_working.path();
+
+    // Simulate ~/.tau/AGENTS.md
+    let tau_agents_md = home_path.join(".tau/AGENTS.md");
+    fs::create_dir_all(tau_agents_md.parent().unwrap()).unwrap();
+    fs::write(&tau_agents_md, "Global agents configuration\n").unwrap();
+
+    // Simulate AGENTS.md at cwd.
+    let cwd_agents_md = working_path.join("AGENTS.md");
+    fs::write(&cwd_agents_md, "Local agents configuration\n").unwrap();
+
+    // Mock the home and current directory paths.
+    let cwd = working_path.display().to_string();
+    let concatenated = crate::agent::system_prompt::read_agents_md(&cwd, Some(home_path));
+
+    assert!(concatenated.contains("Global agents configuration"));
+    assert!(concatenated.contains("Local agents configuration"));
+
+    // Clean up temporary directories.
+    temp_home.close().unwrap();
+    temp_working.close().unwrap();
+}
+
+#[test]
+fn test_read_agents_md_from_nested_cwd_includes_parent_chain_in_order() {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    let temp_home = tempdir().unwrap();
+    let home_path = temp_home.path();
+
+    // Simulate ~/.tau/AGENTS.md
+    let tau_agents_md = home_path.join(".tau/AGENTS.md");
+    fs::create_dir_all(tau_agents_md.parent().unwrap()).unwrap();
+    fs::write(&tau_agents_md, "Global config\n").unwrap();
+
+    // Build nested workspace: <root>/project/subdir
+    let root = tempdir().unwrap();
+    let project = root.path().join("project");
+    let subdir = project.join("subdir");
+    fs::create_dir_all(&subdir).unwrap();
+
+    fs::write(project.join("AGENTS.md"), "Project-level config\n").unwrap();
+    fs::write(subdir.join("AGENTS.md"), "Subdir-level config\n").unwrap();
+
+    let cwd = subdir.display().to_string();
+    let concatenated = crate::agent::system_prompt::read_agents_md(&cwd, Some(home_path));
+
+    let global_idx = concatenated.find("Global config").unwrap();
+    let subdir_idx = concatenated.find("Subdir-level config").unwrap();
+    let project_idx = concatenated.find("Project-level config").unwrap();
+
+    // read_agents_md appends in this order: global, cwd, then each parent up to root.
+    assert!(global_idx < subdir_idx);
+    assert!(subdir_idx < project_idx);
+
+    temp_home.close().unwrap();
+    root.close().unwrap();
+}

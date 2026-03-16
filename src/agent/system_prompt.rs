@@ -1,7 +1,41 @@
 use chrono::Local;
+use directories::BaseDirs;
+use std::{fs, path::Path};
 
 use crate::agent::types::ToolRegistry;
 use crate::skills::SkillMeta;
+
+/// Helper to read and combine AGENTS.md content.
+pub fn read_agents_md(cwd: &str, test_home: Option<&Path>) -> String {
+    let mut content = String::new();
+
+    // Check for ~/.tau/AGENTS.md
+    let home_dir_buf = test_home.map(|p| p.to_path_buf()).or_else(|| BaseDirs::new().map(|bd| bd.home_dir().to_path_buf()));
+    if let Some(home_dir) = home_dir_buf.as_deref() {
+        let global_agents_md = home_dir.join(".tau/AGENTS.md");
+        if global_agents_md.exists() && let Ok(file_content) = fs::read_to_string(&global_agents_md) {
+            content.push_str(&file_content);
+            content.push('\n');
+        }
+    }
+
+    // Check cwd and its parent directories for AGENTS.md
+    let mut current_dir = Path::new(cwd);
+    loop {
+        let agents_md_path = current_dir.join("AGENTS.md");
+        if agents_md_path.exists() && let Ok(file_content) = fs::read_to_string(&agents_md_path) {
+            content.push_str(&file_content);
+            content.push('\n');
+        }
+
+        match current_dir.parent() {
+            Some(parent) if parent != current_dir => current_dir = parent,
+            _ => break,
+        }
+    }
+
+    content
+}
 
 /// Build the default system prompt for the agent loop.
 ///
@@ -11,6 +45,9 @@ use crate::skills::SkillMeta;
 /// `<available_skills>` block when skill files are present.
 pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str, skills: &[SkillMeta]) -> String {
     let date = Local::now().format("%Y-%m-%d").to_string();
+
+    // Include AGENTS.md content
+    let agents_md_content = read_agents_md(cwd, None);
 
     // Build tool list sorted by name for deterministic output.
     let mut tool_names: Vec<&str> = tools.keys().map(String::as_str).collect();
@@ -74,6 +111,7 @@ Available tools:\n\
 Guidelines:\n\
 {guidelines_text}\n\
 \n\
+{agents_md_content}\n\
 Current date: {date}\n\
 Current working directory: {cwd}{skills_section}"
     )
@@ -100,12 +138,12 @@ fn render_skills_block(skills: &[SkillMeta]) -> String {
         .join("\n");
 
     format!(
-        "\n\nThe following skills provide specialized instructions for specific tasks.\n\
+        "\n\
+\nThe following skills provide specialized instructions for specific tasks.\n\
 Use the read tool to load a skill's file when the task matches its description.\n\
 When a skill file references a relative path, resolve it against the skill directory \
 (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\
-\n\
-<available_skills>\n{entries}\n</available_skills>"
+\n<available_skills>\n{entries}\n</available_skills>"
     )
 }
 

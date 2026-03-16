@@ -744,9 +744,8 @@ impl App {
                 );
                 self.refresh_in_progress = false;
                 if success {
-                    self.messages
-                        .push(Message::assistant(format!("[token refreshed: {provider}]")));
-                    self.persist_messages();
+                    // Silently refresh — no message added to the chat log or
+                    // LLM history; the retry will continue seamlessly.
                     self.login_needs_rebuild = true;
                 } else {
                     self.retry_after_refresh = false;
@@ -901,7 +900,7 @@ impl App {
 
         if let Some(last) = self.messages.last()
             && last.role == Role::Assistant
-            && last.content.starts_with("[Error:")
+            && (last.content.starts_with("[Error:") || last.content.starts_with("[token refresh"))
         {
             self.messages.pop();
             self.persist_messages();

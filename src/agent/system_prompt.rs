@@ -39,15 +39,10 @@ pub fn read_agents_md(cwd: &str, test_home: Option<&Path>) -> String {
 
 /// Build the default system prompt for the agent loop.
 ///
-/// Mirrors pi-mono's `buildSystemPrompt`: declares the agent's identity,
-/// lists available tools with their descriptions, adds tool-use guidelines,
-/// stamps the current date and working directory, and optionally appends an
-/// `<available_skills>` block when skill files are present.
+/// Structure mirrors pi-mono's `buildSystemPrompt`: identity, tool list,
+/// tool-aware guidelines, project context (AGENTS.md), skills, then date/cwd.
 pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str, skills: &[SkillMeta]) -> String {
     let date = Local::now().format("%Y-%m-%d").to_string();
-
-    // Include AGENTS.md content
-    let agents_md_content = read_agents_md(cwd, None);
 
     // Build tool list sorted by name for deterministic output.
     let mut tool_names: Vec<&str> = tools.keys().map(String::as_str).collect();
@@ -72,8 +67,15 @@ pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str, skills: &[SkillMeta]
     let has = |name: &str| tool_names.contains(&name);
     let mut guidelines: Vec<&str> = Vec::new();
 
+    // File exploration: prefer dedicated tools over bash when both are available.
+    if has("bash") && !has("find_files") {
+        guidelines.push("Use bash for file operations like ls, find, grep.");
+    } else if has("bash") && has("find_files") {
+        guidelines.push("Prefer find_files over bash for filesystem exploration.");
+    }
+
     if has("read_file") && has("edit_file") {
-        guidelines.push("Use read_file to examine files before editing.");
+        guidelines.push("Use read_file to examine files before editing. You must use this tool instead of cat or sed.");
     }
     if has("edit_file") {
         guidelines.push("Use edit_file for precise changes — old_text must match exactly.");
@@ -81,16 +83,16 @@ pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str, skills: &[SkillMeta]
     if has("write_file") {
         guidelines.push("Use write_file only for new files or complete rewrites.");
     }
-    if has("find_files") || has("bash") {
-        guidelines
-            .push("Use find_files or bash to explore the filesystem rather than guessing paths.");
+    if has("edit_file") || has("write_file") {
+        guidelines.push("When summarizing your actions, output plain text directly — do NOT use bash or cat to display what you did.");
     }
     if has("ask_user") {
         guidelines.push("Use ask_user only when the task requires a user decision or information you cannot infer.");
         guidelines.push("Before calling ask_user, gather relevant context with your other tools and include a short summary in the context field.");
     }
-    guidelines.push("Be concise. Show file paths clearly when working with files.");
-    guidelines.push("Always use your tools to answer questions about files and the system — do not write code that the user would have to run themselves.");
+    guidelines.push("Never describe a change as done or claim to have implemented something unless you have called the appropriate tools in this response to make that change. If you intend to make edits, call the tools now.");
+    guidelines.push("Be concise in your responses.");
+    guidelines.push("Show file paths clearly when working with files.");
 
     let guidelines_text = guidelines
         .iter()
@@ -98,22 +100,29 @@ pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str, skills: &[SkillMeta]
         .collect::<Vec<_>>()
         .join("\n");
 
+    // AGENTS.md content rendered as a labelled project context section.
+    let agents_md_content = read_agents_md(cwd, None);
+    let project_context_section = if agents_md_content.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\n# Project Context\n\nProject-specific instructions and guidelines:\n\n{agents_md_content}")
+    };
+
     let skills_section = render_skills_block(skills);
 
     format!(
-        "You are an expert coding assistant and autonomous agent. \
-You help users by reading files, executing commands, editing code, and writing new files. \
-Use your tools proactively to answer questions — never write code as a substitute for calling a tool.\n\
+        "You are an expert coding assistant operating inside tau, a coding agent harness. \
+You help users by reading files, executing commands, editing code, and writing new files.\n\
 \n\
 Available tools:\n\
 {tool_list}\n\
 \n\
-Guidelines:\n\
-{guidelines_text}\n\
+In addition to the tools above, you may have access to other custom tools depending on the project.\n\
 \n\
-{agents_md_content}\n\
+Guidelines:\n\
+{guidelines_text}{project_context_section}{skills_section}\n\
 Current date: {date}\n\
-Current working directory: {cwd}{skills_section}"
+Current working directory: {cwd}"
     )
 }
 

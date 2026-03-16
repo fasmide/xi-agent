@@ -227,12 +227,12 @@ fn open_url(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         Command::new("open").arg(url).spawn()?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(target_os = "windows")]
     {
         Command::new("cmd").args(["/C", "start", "", url]).spawn()?;
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {

@@ -1,8 +1,8 @@
 use clap::Parser;
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers,
-        KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
+        KeyModifiers, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
         PushKeyboardEnhancementFlags,
     },
     execute,
@@ -10,7 +10,7 @@ use crossterm::{
 };
 use futures_util::StreamExt;
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::{io, sync::Arc};
+use std::{io, io::ErrorKind, sync::Arc};
 
 mod agent;
 mod app;
@@ -90,12 +90,22 @@ async fn main() -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+    let mut keyboard_enhancements_enabled = false;
+    match execute!(
         stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
         PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
-    )?;
+    ) {
+        Ok(()) => keyboard_enhancements_enabled = true,
+        Err(e) if e.kind() == ErrorKind::Unsupported => {
+            log::debug!(
+                "keyboard progressive enhancement unsupported on this terminal; continuing without it"
+            );
+        }
+        Err(e) => return Err(e),
+    }
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -181,12 +191,10 @@ async fn main() -> io::Result<()> {
     }
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        PopKeyboardEnhancementFlags,
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    if keyboard_enhancements_enabled {
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    }
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     Ok(())
@@ -263,6 +271,13 @@ async fn run(
             Some(Ok(ev)) = crossterm_events.next() => {
                 match ev {
                     Event::Key(key) => {
+                        // On Windows with keyboard enhancement flags enabled,
+                        // Crossterm can emit both Press and Release key events.
+                        // Ignore Release so one shortcut maps to one action.
+                        if key.kind == KeyEventKind::Release {
+                            continue;
+                        }
+
                         if key.code == KeyCode::Char('c')
                             && key.modifiers.contains(KeyModifiers::CONTROL)
                         {

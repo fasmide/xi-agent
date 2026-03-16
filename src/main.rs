@@ -6,7 +6,9 @@ use crossterm::{
         PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
+    },
 };
 use futures_util::StreamExt;
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -88,9 +90,15 @@ async fn main() -> io::Result<()> {
     // Priority: --model flag > env vars > config.toml > provider default.
     let mut current_model = resolve_model(cli.model.as_deref(), &current_kind, &config);
 
+    let window_folder = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| ".".to_string());
+    let window_title = format!("𝜏 - {window_folder}");
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, SetTitle(&window_title), EnterAlternateScreen, EnableMouseCapture)?;
 
     let mut keyboard_enhancements_enabled = false;
     match execute!(

@@ -66,7 +66,7 @@ pub struct App {
     pub current_provider: String,
     /// Currently active thinking / reasoning level.
     pub current_thinking: ThinkingLevel,
-    /// Agent loop configuration (tools, hooks, max_turns).
+    /// Agent loop configuration (tools, hooks).
     pub agent_config: AgentLoopConfig,
     /// Skills loaded from all supported skill roots.
     pub loaded_skills: Vec<SkillMeta>,
@@ -967,7 +967,6 @@ impl App {
             tools: self.agent_config.tools.clone(),
             before_tool_call: None,
             after_tool_call: None,
-            max_turns: self.agent_config.max_turns,
         };
 
         let provider = Arc::clone(provider);
@@ -1004,7 +1003,6 @@ impl App {
             tools: self.agent_config.tools.clone(),
             before_tool_call: None,
             after_tool_call: None,
-            max_turns: self.agent_config.max_turns,
         };
 
         let provider = Arc::clone(provider);
@@ -1041,7 +1039,6 @@ impl App {
             tools: self.agent_config.tools.clone(),
             before_tool_call: None,
             after_tool_call: None,
-            max_turns: self.agent_config.max_turns,
         };
 
         let provider = Arc::clone(provider);

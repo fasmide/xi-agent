@@ -16,7 +16,7 @@ pub use system_prompt::build_system_prompt;
 pub use types::{AgentEvent, AgentLoopConfig, ToolResult};
 
 /// Run the agent loop: call the LLM, execute tool calls, repeat until the
-/// model gives a final text answer or `max_turns` is reached.
+/// model gives a final text answer.
 ///
 /// All activity is reported back to `App` via `AgentEvent`s sent on `tx`.
 pub async fn run_agent_loop(
@@ -36,7 +36,7 @@ pub async fn run_agent_loop(
         })
         .collect();
 
-    for turn in 0..config.max_turns {
+    loop {
         // ── Stream the assistant response ─────────────────────────────────────
         let mut stream = provider.stream_chat_with_tools(messages.clone(), tool_defs.clone());
 
@@ -131,14 +131,5 @@ pub async fn run_agent_loop(
         }
 
         let _ = tx.send(AgentEvent::TurnEnd);
-
-        // Continue the loop for the next LLM turn.
-        let _ = turn; // suppress unused variable warning on last iteration
     }
-
-    // Reached max_turns without a final answer.
-    let _ = tx.send(AgentEvent::Error(format!(
-        "Reached maximum turn limit ({})",
-        config.max_turns
-    )));
 }

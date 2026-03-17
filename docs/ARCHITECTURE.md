@@ -4,8 +4,8 @@
 
 `tau` is a terminal AI agent harness. It provides a streaming TUI for
 conversational interaction with LLMs and runs the full agentic loop: user
-message → model response → tool call → tool result → model continues, for
-up to `max_turns` iterations.
+message → model response → tool call → tool result → model continues,
+until the model returns a final answer without tool calls.
 
 ## Module Map
 
@@ -47,7 +47,7 @@ User keystroke → App::submit
             provider.stream_chat_with_tools(messages, tool_defs)
               └─ yields LlmEvent::{Token, ThinkingToken, ToolCall, Done, Error}
             if ToolCall → tool.execute(args) → ToolResult
-            loop until no tool calls or max_turns
+            loop until no tool calls
             sends AgentEvent::{TextToken, ThinkingToken, ToolCallStart,
                                ToolCallEnd, TurnEnd, Done, Error} on tx
   App::apply_event drains tx on each draw tick → updates messages vec
@@ -109,7 +109,6 @@ pub struct AgentLoopConfig {
     pub tools: ToolRegistry,
     pub before_tool_call: Option<Box<dyn Fn(&str, &Value) -> bool + Send + Sync>>,
     pub after_tool_call:  Option<Box<dyn Fn(&str, &ToolResult) -> Option<ToolResult> + Send + Sync>>,
-    pub max_turns: usize,
 }
 ```
 

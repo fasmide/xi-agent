@@ -46,13 +46,12 @@ impl LlmProvider for MockProvider {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Run the agent loop with the given provider and collect all emitted events.
-async fn run_and_collect(provider: MockProvider, max_turns: usize) -> Vec<AgentEvent> {
+async fn run_and_collect(provider: MockProvider) -> Vec<AgentEvent> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let config = AgentLoopConfig {
         tools: HashMap::new(),
         before_tool_call: None,
         after_tool_call: None,
-        max_turns,
     };
     let messages = vec![Message::user("hi")];
     run_agent_loop(messages, config, Arc::new(provider), tx).await;
@@ -71,7 +70,7 @@ async fn agent_loop_single_text_turn() {
         LlmEvent::Token("hello".to_string()),
         LlmEvent::Done,
     ]]);
-    let events = run_and_collect(provider, 10).await;
+    let events = run_and_collect(provider).await;
 
     // First event must be TextToken("hello").
     assert!(
@@ -103,7 +102,7 @@ async fn agent_loop_tool_call_then_text() {
         ],
         vec![LlmEvent::Token("result".to_string()), LlmEvent::Done],
     ]);
-    let events = run_and_collect(provider, 10).await;
+    let events = run_and_collect(provider).await;
 
     let has_tool_start = events
         .iter()
@@ -123,27 +122,13 @@ async fn agent_loop_tool_call_then_text() {
 }
 
 #[tokio::test]
-async fn agent_loop_max_turns_reached() {
-    // Provider always emits a tool call, so the loop never reaches a plain
-    // text answer.  With max_turns=2, it should stop with Error after 2 turns.
-    let turns: Vec<Vec<LlmEvent>> = (0..10)
-        .map(|_| {
-            vec![
-                LlmEvent::ToolCall {
-                    id: "call_1".to_string(),
-                    name: "bash".to_string(),
-                    args: serde_json::json!({"command": "echo hi"}),
-                },
-                LlmEvent::Done,
-            ]
-        })
-        .collect();
-    let provider = MockProvider::new(turns);
-    let events = run_and_collect(provider, 2).await;
+async fn agent_loop_stream_error_is_reported() {
+    let provider = MockProvider::new(vec![vec![LlmEvent::Error("boom".to_string())]]);
+    let events = run_and_collect(provider).await;
 
     assert!(
-        matches!(events.last().unwrap(), AgentEvent::Error(_)),
-        "expected Error as last event, got: {:?}",
+        matches!(events.last().unwrap(), AgentEvent::Error(e) if e == "boom"),
+        "expected Error('boom') as last event, got: {:?}",
         events.last()
     );
 }
@@ -169,7 +154,6 @@ async fn agent_loop_before_hook_blocks_tool() {
         tools: HashMap::new(),
         before_tool_call: Some(Box::new(|_name, _args| false)), // block everything
         after_tool_call: None,
-        max_turns: 10,
     };
     let messages = vec![Message::user("hi")];
     run_agent_loop(messages, config, Arc::new(provider), tx).await;

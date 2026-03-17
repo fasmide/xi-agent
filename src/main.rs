@@ -131,7 +131,6 @@ async fn main() -> io::Result<()> {
             tools: std::collections::HashMap::new(),
             before_tool_call: None,
             after_tool_call: None,
-            max_turns: 20,
         },
     );
 
@@ -693,7 +692,6 @@ async fn run_print_mode(
         tools,
         before_tool_call: None,
         after_tool_call: None,
-        max_turns: 20,
     };
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();

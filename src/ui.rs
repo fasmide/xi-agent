@@ -653,8 +653,7 @@ fn build_log_lines(
                 } else {
                     Color::Green
                 };
-                let label = format!("↳ {display}");
-                append_message_colored(&mut lines, &label, width, color);
+                append_tool_result_block(&mut lines, &display, width, color);
             }
         }
     }
@@ -669,6 +668,39 @@ fn append_message_colored(out: &mut Vec<Line<'static>>, content: &str, width: us
     let chunks = wrap_str(content, width);
     for chunk in chunks {
         out.push(Line::from(vec![Span::styled(chunk, style)]));
+    }
+}
+
+/// Append tool output as a colored block with a left marker on every visual line.
+fn append_tool_result_block(
+    out: &mut Vec<Line<'static>>,
+    content: &str,
+    width: usize,
+    color: Color,
+) {
+    let marker_style = Style::default().fg(color);
+    let text_style = Style::default().fg(color);
+
+    if width == 0 {
+        out.push(Line::from(vec![Span::styled("│".to_string(), marker_style)]));
+        return;
+    }
+
+    let content_width = width.saturating_sub(1).max(1);
+    let segments: Vec<&str> = if content.is_empty() {
+        vec![""]
+    } else {
+        content.split('\n').collect()
+    };
+
+    for segment in segments {
+        let chunks = wrap_str(segment, content_width);
+        for chunk in chunks {
+            out.push(Line::from(vec![
+                Span::styled("│", marker_style),
+                Span::styled(chunk, text_style),
+            ]));
+        }
     }
 }
 
@@ -857,6 +889,13 @@ fn format_context_size(n: usize) -> String {
 mod tests {
     use super::*;
 
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
     #[test]
     fn wrap_str_splits_at_width() {
         // "hello world" at width 5 should produce at least two chunks.
@@ -886,5 +925,26 @@ mod tests {
         let chunks = wrap_str("hi", 80);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0], "hi");
+    }
+
+    #[test]
+    fn tool_result_block_prefixes_each_line() {
+        let mut out = Vec::new();
+        append_tool_result_block(&mut out, "line one\nline two", 80, Color::Green);
+        assert_eq!(out.len(), 2);
+        assert_eq!(line_text(&out[0]), "│line one");
+        assert_eq!(line_text(&out[1]), "│line two");
+    }
+
+    #[test]
+    fn tool_result_block_wraps_and_keeps_prefix() {
+        let mut out = Vec::new();
+        append_tool_result_block(&mut out, "abcdef", 4, Color::Green);
+        assert!(out.len() >= 2);
+        for line in out {
+            let text = line_text(&line);
+            assert!(text.starts_with('│'));
+            assert!(unicode_width::UnicodeWidthStr::width(text.as_str()) <= 4);
+        }
     }
 }

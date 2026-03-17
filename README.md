@@ -28,7 +28,6 @@ thinking output, and slash commands are all implemented. See
 High priority:
 
 - [ ] Steering
-- [ ] Custom tools (user-defined, pluggable)
 
 Medium priority:
 
@@ -44,6 +43,7 @@ Low priority:
 Out of scope (for now):
 
 - [-] Safety guardrails (tool use is unrestricted)
+- [-] Additional built-in tools beyond the current set
 
 ## License
 
@@ -58,19 +58,12 @@ cargo build --release
 
 ## Providers
 
-| Provider         | Key / credential                                      | Config fields |
-|------------------|-------------------------------------------------------|---------------|
-| `copilot`        | tau auth store (`auth.toml` in platform config dir) | `[copilot].model` |
-| `openai`         | configure API key in `config.toml`                  | `[openai].api_key`, `[openai].base_url`, `[openai].model` |
-| `codex`          | tau auth store (`auth.toml` in platform config dir) | `[codex].base_url`, `[codex].model` |
-| `ollama`         | none (local)                                          | `[ollama].base_url`, `[ollama].model` |
+Supported providers:
 
-The default provider is `copilot`. Override at startup:
-
-```sh
-tau --provider openai
-tau -P ollama -m llama3.2
-```
+- `copilot`
+- `openai`
+- `codex`
+- `ollama`
 
 ## Configuration
 

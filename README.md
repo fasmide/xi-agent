@@ -129,7 +129,7 @@ Environment variables:
 | `Ctrl+I`        | Toggle provider/model info bar  |
 | `Ctrl+R`        | Resume latest session for current folder |
 | `Ctrl+C`        | Quit                            |
-| `Esc`           | Quit (or cancel slash command)  |
+| `Esc`           | Abort current agent loop; also cancel login/slash/selection contexts |
 
 ## Slash commands
 

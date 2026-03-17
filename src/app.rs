@@ -2,6 +2,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use tokio::task::JoinHandle;
 use tui_textarea::{CursorMove, TextArea};
 
 use crate::{
@@ -136,6 +137,8 @@ pub struct App {
     /// Receives AgentEvents forwarded from the active agent loop task.
     pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     event_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    /// JoinHandle for the currently running agent loop task (if any).
+    agent_task: Option<JoinHandle<()>>,
     /// Receives model lists forwarded from `list_models` tasks.
     pub(crate) models_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<String>>,
     models_tx: tokio::sync::mpsc::UnboundedSender<Vec<String>>,
@@ -206,6 +209,7 @@ impl App {
             ask_reply: None,
             event_rx,
             event_tx,
+            agent_task: None,
             models_rx,
             models_tx,
             login_rx,
@@ -971,9 +975,9 @@ impl App {
 
         let provider = Arc::clone(provider);
         let tx = self.event_tx.clone();
-        tokio::spawn(async move {
+        self.agent_task = Some(tokio::spawn(async move {
             run_agent_loop(llm_messages, config, provider, tx).await;
-        });
+        }));
     }
 
     /// Submit a pre-built text string directly to the agent loop, bypassing the
@@ -1007,9 +1011,9 @@ impl App {
 
         let provider = Arc::clone(provider);
         let tx = self.event_tx.clone();
-        tokio::spawn(async move {
+        self.agent_task = Some(tokio::spawn(async move {
             run_agent_loop(llm_messages, config, provider, tx).await;
-        });
+        }));
     }
 
     pub fn retry_last_request(&mut self, provider: &DynProvider) {
@@ -1043,9 +1047,19 @@ impl App {
 
         let provider = Arc::clone(provider);
         let tx = self.event_tx.clone();
-        tokio::spawn(async move {
+        self.agent_task = Some(tokio::spawn(async move {
             run_agent_loop(llm_messages, config, provider, tx).await;
-        });
+        }));
+    }
+
+    pub fn abort_agent_loop(&mut self) {
+        if let Some(handle) = self.agent_task.take() {
+            handle.abort();
+            self.streaming = false;
+            self.messages
+                .push(Message::assistant("[agent loop aborted]"));
+            self.persist_messages();
+        }
     }
 
     // ── Scrolling ─────────────────────────────────────────────────────────────
@@ -1110,9 +1124,11 @@ impl App {
             }
             AgentEvent::Done => {
                 self.streaming = false;
+                self.agent_task = None;
                 self.persist_messages();
             }
             AgentEvent::Error(e) => {
+                self.agent_task = None;
                 let is_auth_401 = e.contains(" 401")
                     && (self.current_provider == "copilot" || self.current_provider == "codex");
 

@@ -400,7 +400,12 @@ async fn run(
                                     }
                                 }
                                 KeyCode::Esc => {
-                                    if app.has_pending_ask() {
+                                    if app.streaming {
+                                        if app.has_pending_ask() {
+                                            app.cancel_pending_ask();
+                                        }
+                                        app.abort_agent_loop();
+                                    } else if app.has_pending_ask() {
                                         app.cancel_pending_ask();
                                     } else {
                                         app.exit_selection_mode();
@@ -412,14 +417,17 @@ async fn run(
                         }
 
                         if key.code == KeyCode::Esc {
-                            if app.has_pending_ask() {
+                            if app.streaming {
+                                if app.has_pending_ask() {
+                                    app.cancel_pending_ask();
+                                }
+                                app.abort_agent_loop();
+                            } else if app.has_pending_ask() {
                                 app.cancel_pending_ask();
                             } else if app.login_active {
                                 app.cancel_login();
                             } else if app.in_slash_mode() {
                                 app.reset_textarea();
-                            } else {
-                                return Ok(RunResult::Quit);
                             }
                             continue;
                         }

@@ -122,10 +122,23 @@ pub fn context_window_for_model(model: &str) -> Option<usize> {
     None
 }
 
-/// Returns true if the model name identifies a codex model that requires the
-/// Responses API (`/v1/responses`) rather than the chat completions endpoint.
-fn is_codex_model(model: &str) -> bool {
+/// Returns true for Claude models that require the Anthropic Messages API
+/// (`/v1/messages`) rather than the OpenAI Chat Completions endpoint.
+fn is_anthropic_model(model: &str) -> bool {
+    model.starts_with("claude")
+}
+
+/// Returns true for models that require the OpenAI Responses API
+/// (`/v1/responses`) rather than the Chat Completions endpoint.
+///
+/// This covers both explicitly named "codex" models and GPT-5 base models
+/// that the Copilot proxy also serves via the Responses API.
+fn is_responses_model(model: &str) -> bool {
     model.contains("codex")
+        || matches!(
+            model,
+            "gpt-5" | "gpt-5-mini" | "gpt-5.1" | "gpt-5.2" | "gpt-5.4"
+        )
 }
 
 /// Build a boxed `LlmProvider` for `kind` with the given model name.
@@ -142,7 +155,14 @@ pub fn build_provider(
             let creds = store.get_copilot().ok_or_else(|| {
                 anyhow::anyhow!("Not authenticated for copilot. Run /login copilot.")
             })?;
-            if is_codex_model(model) {
+            if is_anthropic_model(model) {
+                let p = copilot::anthropic_from_access_token(
+                    &creds.access_token,
+                    model,
+                    creds.base_url.as_deref(),
+                );
+                Ok(Arc::new(p))
+            } else if is_responses_model(model) {
                 let p = copilot::codex_from_access_token(
                     &creds.access_token,
                     model,

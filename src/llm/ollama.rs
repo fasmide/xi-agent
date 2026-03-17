@@ -228,6 +228,10 @@ impl LlmProvider for OllamaProvider {
                 stream: true,
             };
 
+            if let Ok(json) = serde_json::to_string_pretty(&body) {
+                log::debug!("[TAU_DEBUG] → ollama request:\n{json}");
+            }
+
             let response = match client
                 .post(&url)
                 .json(&body)
@@ -245,12 +249,17 @@ impl LlmProvider for OllamaProvider {
             if !response.status().is_success() {
                 let status = response.status();
                 let text = response.text().await.unwrap_or_default();
+                let preview: String = text.chars().take(1000).collect();
+                log::warn!("ollama api error: status={} body={}", status, preview);
                 yield LlmEvent::Error(format!("Ollama returned {status}: {text}"));
                 return;
             }
 
+            log::debug!("← HTTP {} from ollama", response.status());
+
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
+            let mut line_num = 0usize;
             while let Some(chunk) = byte_stream.next().await {
                 let bytes = match chunk {
                     Ok(b) => b,
@@ -260,6 +269,10 @@ impl LlmProvider for OllamaProvider {
                 while let Some(pos) = buf.find('\n') {
                     let line = buf[..pos].trim().to_string();
                     buf.drain(..=pos);
+                    if !line.is_empty() {
+                        log::debug!("[TAU_DEBUG] ← ollama chunk {line_num}: {line}");
+                        line_num += 1;
+                    }
                     let mut events = Vec::new();
                     let done = parse_ndjson_line(&line, &mut events);
                     for ev in events { yield ev; }
@@ -300,7 +313,7 @@ impl LlmProvider for OllamaProvider {
             };
 
             if let Ok(json) = serde_json::to_string_pretty(&body) {
-                log::debug!("[TAU_DEBUG] → request:\n{json}");
+                log::debug!("[TAU_DEBUG] → ollama request:\n{json}");
             }
 
             let response = match client
@@ -325,6 +338,8 @@ impl LlmProvider for OllamaProvider {
                 yield LlmEvent::Error(format!("Ollama returned {status}: {text}"));
                 return;
             }
+
+            log::debug!("← HTTP {} from ollama", response.status());
 
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
@@ -355,13 +370,21 @@ impl LlmProvider for OllamaProvider {
         let url = format!("{}/api/tags", self.base_url);
         let client = self.client.clone();
         Box::pin(async move {
+            log::debug!("→ GET {url}");
             let response = match client.get(&url).send().await {
                 Ok(r) => r,
-                Err(_) => return vec![],
+                Err(e) => {
+                    log::warn!("ollama list_models error: {e}");
+                    return vec![];
+                }
             };
+            log::debug!("← HTTP {} from ollama list_models", response.status());
             let tags: TagsResponse = match response.json().await {
                 Ok(t) => t,
-                Err(_) => return vec![],
+                Err(e) => {
+                    log::warn!("ollama list_models parse error: {e}");
+                    return vec![];
+                }
             };
             tags.models.into_iter().map(|m| m.name).collect()
         })

@@ -112,6 +112,8 @@ impl CodexProvider {
                 return;
             }
 
+            log::debug!("← HTTP {} from codex", response.status());
+
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
             // Track pending function calls keyed by item index or call_id.

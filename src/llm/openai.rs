@@ -135,6 +135,8 @@ impl OpenAiProvider {
                 return;
             }
 
+            log::debug!("← HTTP {} from openai", response.status());
+
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
             // Accumulate partial tool-call deltas keyed by index.
@@ -536,13 +538,21 @@ impl LlmProvider for OpenAiProvider {
             for (k, v) in &extra_headers {
                 req = req.header(k.as_str(), v.as_str());
             }
+            log::debug!("→ GET {url}");
             let response = match req.send().await {
                 Ok(r) => r,
-                Err(_) => return vec![],
+                Err(e) => {
+                    log::warn!("openai list_models error: {e}");
+                    return vec![];
+                }
             };
+            log::debug!("← HTTP {} from openai list_models", response.status());
             let models: ModelsResponse = match response.json().await {
                 Ok(m) => m,
-                Err(_) => return vec![],
+                Err(e) => {
+                    log::warn!("openai list_models parse error: {e}");
+                    return vec![];
+                }
             };
             let mut ids: Vec<String> = models.data.into_iter().map(|m| m.id).collect();
             ids.sort();

@@ -54,6 +54,7 @@ pub async fn login(
     let client = reqwest::Client::new();
 
     let device_body = format!("client_id={CLIENT_ID}&scope=read%3Auser");
+    log::debug!("→ POST https://github.com/login/device/code");
     let device: DeviceCodeResponse = client
         .post("https://github.com/login/device/code")
         .header("Accept", "application/json")
@@ -93,6 +94,7 @@ pub async fn login(
             "client_id={CLIENT_ID}&device_code={}&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
             urlencoding::encode(&device.device_code)
         );
+        log::debug!("→ POST https://github.com/login/oauth/access_token");
         let token_resp: DeviceTokenResponse = client
             .post("https://github.com/login/oauth/access_token")
             .header("Accept", "application/json")
@@ -131,6 +133,7 @@ pub async fn login(
         }
     };
 
+    log::debug!("→ GET https://api.github.com/copilot_internal/v2/token");
     let copilot: CopilotTokenResponse = client
         .get("https://api.github.com/copilot_internal/v2/token")
         .header("Accept", "application/json")
@@ -155,6 +158,7 @@ pub async fn login(
 
 pub async fn refresh(refresh_token: &str) -> anyhow::Result<CopilotCredentials> {
     let client = reqwest::Client::new();
+    log::debug!("→ GET https://api.github.com/copilot_internal/v2/token (refresh)");
     let copilot: CopilotTokenResponse = client
         .get("https://api.github.com/copilot_internal/v2/token")
         .header("Accept", "application/json")
@@ -166,6 +170,7 @@ pub async fn refresh(refresh_token: &str) -> anyhow::Result<CopilotCredentials> 
         .json()
         .await?;
 
+    log::debug!("copilot token refresh succeeded");
     Ok(CopilotCredentials {
         base_url: extract_base_url(&copilot.token),
         access_token: copilot.token,

@@ -98,7 +98,12 @@ async fn main() -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, SetTitle(&window_title), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        SetTitle(&window_title),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
 
     let mut keyboard_enhancements_enabled = false;
     match execute!(
@@ -537,10 +542,23 @@ fn resolve_provider_kind(cli_override: Option<&str>, config: &TauConfig) -> Prov
 }
 
 fn resolve_model(cli_override: Option<&str>, kind: &ProviderKind, config: &TauConfig) -> String {
+    resolve_model_with_env(cli_override, kind, config, |k| std::env::var(k).ok())
+}
+
+fn resolve_model_with_env(
+    cli_override: Option<&str>,
+    kind: &ProviderKind,
+    config: &TauConfig,
+    get_env: impl Fn(&str) -> Option<String>,
+) -> String {
     cli_override
         .map(ToString::to_string)
-        .or_else(|| std::env::var("COPILOT_MODEL").ok())
-        .or_else(|| std::env::var("OPENAI_MODEL").ok())
+        .or_else(|| match kind {
+            ProviderKind::Copilot => get_env("COPILOT_MODEL"),
+            ProviderKind::OpenAi => get_env("OPENAI_MODEL"),
+            ProviderKind::Codex => get_env("CODEX_MODEL"),
+            ProviderKind::Ollama => get_env("OLLAMA_MODEL"),
+        })
         .or_else(|| match kind {
             ProviderKind::Copilot => config.copilot.model.clone(),
             ProviderKind::OpenAi => config.openai.model.clone(),
@@ -646,4 +664,36 @@ async fn run_print_mode(
     }
 
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_model_with_env;
+    use crate::{config::TauConfig, provider::ProviderKind};
+    use std::collections::HashMap;
+
+    #[test]
+    fn resolve_model_scopes_env_to_selected_provider() {
+        let mut env = HashMap::new();
+        env.insert("OPENAI_MODEL".to_string(), "gpt-4.1".to_string());
+        env.insert("COPILOT_MODEL".to_string(), "gpt-5.3-codex".to_string());
+
+        let model =
+            resolve_model_with_env(None, &ProviderKind::Copilot, &TauConfig::default(), |k| {
+                env.get(k).cloned()
+            });
+        assert_eq!(model, "gpt-5.3-codex");
+    }
+
+    #[test]
+    fn resolve_model_ignores_openai_env_for_copilot_when_missing_copilot_env() {
+        let mut env = HashMap::new();
+        env.insert("OPENAI_MODEL".to_string(), "gpt-4.1".to_string());
+
+        let model =
+            resolve_model_with_env(None, &ProviderKind::Copilot, &TauConfig::default(), |k| {
+                env.get(k).cloned()
+            });
+        assert_eq!(model, ProviderKind::Copilot.default_model());
+    }
 }

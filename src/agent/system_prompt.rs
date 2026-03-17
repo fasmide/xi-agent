@@ -10,10 +10,14 @@ pub fn read_agents_md(cwd: &str, test_home: Option<&Path>) -> String {
     let mut content = String::new();
 
     // Check for ~/.tau/AGENTS.md
-    let home_dir_buf = test_home.map(|p| p.to_path_buf()).or_else(|| BaseDirs::new().map(|bd| bd.home_dir().to_path_buf()));
+    let home_dir_buf = test_home
+        .map(|p| p.to_path_buf())
+        .or_else(|| BaseDirs::new().map(|bd| bd.home_dir().to_path_buf()));
     if let Some(home_dir) = home_dir_buf.as_deref() {
         let global_agents_md = home_dir.join(".tau/AGENTS.md");
-        if global_agents_md.exists() && let Ok(file_content) = fs::read_to_string(&global_agents_md) {
+        if global_agents_md.exists()
+            && let Ok(file_content) = fs::read_to_string(&global_agents_md)
+        {
             content.push_str(&file_content);
             content.push('\n');
         }
@@ -23,7 +27,9 @@ pub fn read_agents_md(cwd: &str, test_home: Option<&Path>) -> String {
     let mut current_dir = Path::new(cwd);
     loop {
         let agents_md_path = current_dir.join("AGENTS.md");
-        if agents_md_path.exists() && let Ok(file_content) = fs::read_to_string(&agents_md_path) {
+        if agents_md_path.exists()
+            && let Ok(file_content) = fs::read_to_string(&agents_md_path)
+        {
             content.push_str(&file_content);
             content.push('\n');
         }
@@ -105,7 +111,9 @@ pub fn build_system_prompt(tools: &ToolRegistry, cwd: &str, skills: &[SkillMeta]
     let project_context_section = if agents_md_content.trim().is_empty() {
         String::new()
     } else {
-        format!("\n\n# Project Context\n\nProject-specific instructions and guidelines:\n\n{agents_md_content}")
+        format!(
+            "\n\n# Project Context\n\nProject-specific instructions and guidelines:\n\n{agents_md_content}"
+        )
     };
 
     let skills_section = render_skills_block(skills);

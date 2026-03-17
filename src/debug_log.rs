@@ -1,12 +1,12 @@
 use std::{
-    fs::{self, OpenOptions},
-    sync::OnceLock,
+    fs::{self, File, OpenOptions},
+    io::{BufWriter, Write},
+    sync::{Mutex, OnceLock},
 };
 
-use chrono::Local;
+use chrono::{Local, Utc};
 use directories::ProjectDirs;
-use log::LevelFilter;
-use simplelog::{ConfigBuilder, WriteLogger};
+use log::{LevelFilter, Log, Metadata, Record};
 
 static LOG_ENABLED: OnceLock<bool> = OnceLock::new();
 static LOG_INITIALIZED: OnceLock<()> = OnceLock::new();
@@ -19,6 +19,35 @@ fn is_enabled() -> bool {
         }
         Err(_) => false,
     })
+}
+
+struct JsonLineLogger {
+    writer: Mutex<BufWriter<File>>,
+}
+
+impl Log for JsonLineLogger {
+    fn enabled(&self, _metadata: &Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &Record) {
+        let entry = serde_json::json!({
+            "timestamp": Utc::now().to_rfc3339(),
+            "level": record.level().as_str(),
+            "target": record.target(),
+            "message": record.args().to_string(),
+        });
+        if let Ok(mut w) = self.writer.lock() {
+            let _ = writeln!(w, "{entry}");
+            let _ = w.flush();
+        }
+    }
+
+    fn flush(&self) {
+        if let Ok(mut w) = self.writer.lock() {
+            let _ = w.flush();
+        }
+    }
 }
 
 pub fn init_logging() {
@@ -34,7 +63,9 @@ pub fn init_logging() {
         return;
     };
     let timestamp = Local::now().format("%Y%m%d-%H%M%S");
-    let log_path = dirs.cache_dir().join(format!("tau-debug-{timestamp}.log"));
+    let log_path = dirs
+        .cache_dir()
+        .join(format!("tau-debug-{timestamp}.jsonl"));
 
     if let Some(parent) = log_path.parent()
         && fs::create_dir_all(parent).is_err()
@@ -46,8 +77,12 @@ pub fn init_logging() {
         return;
     };
 
-    let config = ConfigBuilder::new().set_time_format_rfc3339().build();
-    if WriteLogger::init(LevelFilter::Debug, config, file).is_ok() {
+    let logger = Box::new(JsonLineLogger {
+        writer: Mutex::new(BufWriter::new(file)),
+    });
+
+    if log::set_boxed_logger(logger).is_ok() {
+        log::set_max_level(LevelFilter::Debug);
         let _ = LOG_INITIALIZED.set(());
     }
 }

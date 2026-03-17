@@ -26,8 +26,7 @@ base64 = "0.22"
 sha2 = "0.10"
 getrandom = "0.2"
 urlencoding = "2.1"
-log = "0.4"
-simplelog = "0.12"
+log = { version = "0.4", features = ["std"] }
 toml = { version = "0.8", features = ["parse"] }
 
 [dev-dependencies]

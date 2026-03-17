@@ -101,6 +101,8 @@ impl AnthropicProvider {
                 return;
             }
 
+            log::debug!("← HTTP {} from anthropic", response.status());
+
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
             // Track streaming tool_use blocks: content index → accumulated state.

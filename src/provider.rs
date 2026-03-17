@@ -122,23 +122,46 @@ pub fn context_window_for_model(model: &str) -> Option<usize> {
     None
 }
 
-/// Returns true for Claude models that require the Anthropic Messages API
-/// (`/v1/messages`) rather than the OpenAI Chat Completions endpoint.
-fn is_anthropic_model(model: &str) -> bool {
-    model.starts_with("claude")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CopilotApiRoute {
+    OpenAiChatCompletions,
+    AnthropicMessages,
+    OpenAiResponses,
 }
 
-/// Returns true for models that require the OpenAI Responses API
-/// (`/v1/responses`) rather than the Chat Completions endpoint.
+impl CopilotApiRoute {
+    fn api_name(&self) -> &'static str {
+        match self {
+            Self::OpenAiChatCompletions => "openai-chat-completions",
+            Self::AnthropicMessages => "anthropic-messages",
+            Self::OpenAiResponses => "openai-responses",
+        }
+    }
+
+    fn endpoint_hint(&self) -> &'static str {
+        match self {
+            Self::OpenAiChatCompletions => "/chat/completions",
+            Self::AnthropicMessages => "/v1/messages",
+            Self::OpenAiResponses => "/v1/responses",
+        }
+    }
+}
+
+/// Classify Copilot model routing in a provider-agnostic way.
 ///
-/// This covers both explicitly named "codex" models and GPT-5 base models
-/// that the Copilot proxy also serves via the Responses API.
-fn is_responses_model(model: &str) -> bool {
-    model.contains("codex")
-        || matches!(
-            model,
-            "gpt-5" | "gpt-5-mini" | "gpt-5.1" | "gpt-5.2" | "gpt-5.4"
-        )
+/// This mirrors pi-mono's model metadata behavior:
+/// - Claude models -> Anthropic Messages API.
+/// - Codex and GPT-5 family models -> OpenAI Responses API.
+/// - Everything else -> OpenAI Chat Completions API.
+fn classify_copilot_route(model: &str) -> CopilotApiRoute {
+    let m = model.to_ascii_lowercase();
+    if m.starts_with("claude") {
+        CopilotApiRoute::AnthropicMessages
+    } else if m.contains("codex") || m.starts_with("gpt-5") {
+        CopilotApiRoute::OpenAiResponses
+    } else {
+        CopilotApiRoute::OpenAiChatCompletions
+    }
 }
 
 /// Build a boxed `LlmProvider` for `kind` with the given model name.
@@ -155,14 +178,22 @@ pub fn build_provider(
             let creds = store.get_copilot().ok_or_else(|| {
                 anyhow::anyhow!("Not authenticated for copilot. Run /login copilot.")
             })?;
-            if is_anthropic_model(model) {
+            let route = classify_copilot_route(model);
+            log::debug!(
+                "provider route selected: provider=copilot model={} api={} endpoint_hint={} base_url={}",
+                model,
+                route.api_name(),
+                route.endpoint_hint(),
+                creds.base_url.as_deref().unwrap_or("<from-token>")
+            );
+            if route == CopilotApiRoute::AnthropicMessages {
                 let p = copilot::anthropic_from_access_token(
                     &creds.access_token,
                     model,
                     creds.base_url.as_deref(),
                 );
                 Ok(Arc::new(p))
-            } else if is_responses_model(model) {
+            } else if route == CopilotApiRoute::OpenAiResponses {
                 let p = copilot::codex_from_access_token(
                     &creds.access_token,
                     model,
@@ -220,5 +251,34 @@ pub fn build_provider(
                 .unwrap_or_else(|| "http://localhost:11434".to_string());
             Ok(Arc::new(OllamaProvider::new(base, model.to_string())))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CopilotApiRoute, classify_copilot_route};
+
+    #[test]
+    fn copilot_route_uses_responses_for_codex_models() {
+        assert_eq!(
+            classify_copilot_route("gpt-5.3-codex"),
+            CopilotApiRoute::OpenAiResponses
+        );
+    }
+
+    #[test]
+    fn copilot_route_uses_anthropic_for_claude_models() {
+        assert_eq!(
+            classify_copilot_route("claude-sonnet-4.5"),
+            CopilotApiRoute::AnthropicMessages
+        );
+    }
+
+    #[test]
+    fn copilot_route_uses_chat_completions_for_gpt4o() {
+        assert_eq!(
+            classify_copilot_route("gpt-4o"),
+            CopilotApiRoute::OpenAiChatCompletions
+        );
     }
 }

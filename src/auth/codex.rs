@@ -81,6 +81,7 @@ pub async fn login(
         urlencoding::encode(&verifier),
         urlencoding::encode(REDIRECT_URI)
     );
+    log::debug!("→ POST {TOKEN_URL} (authorization_code)");
     let token: TokenResponse = client
         .post(TOKEN_URL)
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -90,6 +91,8 @@ pub async fn login(
         .error_for_status()?
         .json()
         .await?;
+
+    log::debug!("codex token exchange succeeded");
 
     let account_id = extract_account_id(&token.access_token)
         .ok_or_else(|| anyhow::anyhow!("Failed to extract account id from token"))?;
@@ -110,6 +113,7 @@ pub async fn refresh(refresh_token: &str) -> anyhow::Result<CodexCredentials> {
         urlencoding::encode(CLIENT_ID),
         urlencoding::encode(refresh_token)
     );
+    log::debug!("→ POST {TOKEN_URL} (refresh_token)");
     let token: TokenResponse = client
         .post(TOKEN_URL)
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -119,6 +123,8 @@ pub async fn refresh(refresh_token: &str) -> anyhow::Result<CodexCredentials> {
         .error_for_status()?
         .json()
         .await?;
+
+    log::debug!("codex token refresh succeeded");
 
     let account_id = extract_account_id(&token.access_token)
         .ok_or_else(|| anyhow::anyhow!("Failed to extract account id from token"))?;

@@ -15,6 +15,10 @@ pub fn from_access_token(
     let resolved_base_url = base_url
         .map(|s| s.to_string())
         .unwrap_or_else(|| extract_base_url(access_token));
+    log::debug!(
+        "copilot transport resolved: api=openai-chat-completions base_url={} endpoint=/chat/completions",
+        resolved_base_url
+    );
 
     let extra_headers = vec![
         (
@@ -53,6 +57,10 @@ pub fn anthropic_from_access_token(
     let resolved_base_url = base_url
         .map(|s| s.to_string())
         .unwrap_or_else(|| extract_base_url(access_token));
+    log::debug!(
+        "copilot transport resolved: api=anthropic-messages base_url={} endpoint=/v1/messages",
+        resolved_base_url
+    );
 
     let extra_headers = vec![
         (
@@ -84,7 +92,6 @@ pub fn anthropic_from_access_token(
     )
 }
 
-
 ///
 /// Codex models (e.g. `gpt-5.3-codex`) are not accessible via `/chat/completions`
 /// through the Copilot proxy; they require the OpenAI Responses API (`/v1/responses`).
@@ -99,6 +106,11 @@ pub fn codex_from_access_token(
 
     // Append the Responses API path so CodexProvider hits the right endpoint.
     let responses_url = format!("{}/v1/responses", base.trim_end_matches('/'));
+    log::debug!(
+        "copilot transport resolved: api=openai-responses base_url={} endpoint={}",
+        base,
+        responses_url
+    );
 
     let extra_headers = vec![
         (
@@ -123,7 +135,6 @@ pub fn codex_from_access_token(
 
     CodexProvider::new_with_headers(responses_url, model, access_token, extra_headers)
 }
-
 
 /// Falls back to the known default if the field is absent.
 fn extract_base_url(token: &str) -> String {

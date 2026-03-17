@@ -4,10 +4,6 @@ Items are grouped by priority.
 
 ---
 
-## 🔴 High priority
-
----
-
 ## 🟡 Medium priority
 
 ### Platform credential storage

@@ -42,16 +42,23 @@ src/
 
 ```
 User keystroke → App::submit
-  └─ spawns tokio task: run_agent_loop(messages, config, provider, tx)
-       └─ for each turn:
+  └─ spawns tokio task: run_agent_loop(messages, config, provider, tx, steering_rx)
+       └─ drain steering_rx → insert queued user messages before each turn
+          for each turn:
             provider.stream_chat_with_tools(messages, tool_defs)
               └─ yields LlmEvent::{Token{..}, ThinkingToken, ToolIntentStart, ToolCall, Done, Error}
             if ToolCall → tool.execute(args) → ToolResult
+              └─ drain steering_rx after each tool → skip remaining tools if non-empty
             loop until no tool calls
             sends AgentEvent::{TextToken{..}, ThinkingToken, ToolIntentStart,
-                               ToolCallStart, ToolCallEnd, TurnEnd, Done, Error} on tx
+                               SteeringConsumed, ToolCallStart, ToolCallEnd,
+                               TurnEnd, Done, Error} on tx
+
+User keystroke (while streaming) → App::enqueue_steering_from_input
+  └─ pushes text onto queued_steering (for 🕹️ UI) + sends on steering_tx
+
   App::apply_event drains tx on each draw tick → updates messages vec
-  ui::draw renders messages vec to terminal
+  ui::draw renders messages vec + queued_steering to terminal
 ```
 
 ## Key Types
@@ -94,7 +101,6 @@ pub trait LlmProvider: Send + Sync {
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
-    fn label(&self) -> &str;                          // emoji / display label
     fn parameters_schema(&self) -> serde_json::Value; // JSON Schema object
     fn execute(&self, args: serde_json::Value) -> Pin<Box<dyn Future<Output = ToolResult> + Send + '_>>;
 }

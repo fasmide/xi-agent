@@ -607,42 +607,72 @@ fn build_log_lines(
             Role::Assistant => {
                 let thinking = msg.thinking.as_deref().unwrap_or("");
                 let is_streaming_last = streaming && is_last;
+                let has_answer = is_streaming_last || !msg.content.is_empty();
 
                 // Render thinking block (if any thinking content has arrived).
                 if !thinking.is_empty() {
                     append_message_dim(&mut lines, thinking, "", width);
-                    // Blank line separator between thinking and answer.
-                    lines.push(Line::default());
+                    // Separator between thinking and answer is lazy: only render
+                    // when an answer line will actually be shown.
+                    if has_answer {
+                        lines.push(Line::default());
+                    }
                 }
 
-                // Render the answer. Show the streaming cursor (▋) at the end
-                // of the answer area whenever this is the active streaming message.
-                // If no answer text has arrived yet, render just the cursor.
-                let content = if is_streaming_last && msg.content.is_empty() {
-                    "▋".to_string()
-                } else {
-                    msg.content.clone()
-                };
-                let suffix = if is_streaming_last && !msg.content.is_empty() {
-                    "▋"
-                } else {
-                    ""
-                };
-                append_message(&mut lines, &content, suffix, width, false);
+                // Render the answer only when there is visible answer content.
+                // Show the streaming cursor (▋) at the end of the answer area
+                // whenever this is the active streaming message.
+                if has_answer {
+                    let content = if is_streaming_last && msg.content.is_empty() {
+                        "▋".to_string()
+                    } else {
+                        msg.content.clone()
+                    };
+                    let suffix = if is_streaming_last && !msg.content.is_empty() {
+                        "▋"
+                    } else {
+                        ""
+                    };
+                    append_message(&mut lines, &content, suffix, width, false);
+                }
             }
             Role::ToolCall => {
                 let name = msg.tool_name.as_deref().unwrap_or("unknown");
-                let label = match msg.tool_args.as_ref() {
+                let mut label = match msg.tool_args.as_ref() {
                     Some(args) => tool_presentation::tool_invocation_label(name, args),
                     None => {
                         tool_presentation::tool_invocation_label(name, &serde_json::Value::Null)
                     }
                 };
+
+                if matches!(name, "read" | "read_file")
+                    && let Some(next) = messages.get(idx + 1)
+                    && next.role == Role::ToolResult
+                    && let Some((start, end, total, _)) = split_read_file_header(&next.content)
+                {
+                    label.push_str(&format!(" [{start}-{end}/{total}]") );
+                }
+
                 append_message_colored(&mut lines, &label, width, Color::Cyan);
             }
             Role::ToolResult => {
-                let preview: String = msg.content.chars().take(200).collect();
-                let truncated = msg.content.len() > 200;
+                let prev_is_read = matches!(
+                    messages.get(idx.saturating_sub(1)),
+                    Some(prev)
+                        if prev.role == Role::ToolCall
+                            && matches!(prev.tool_name.as_deref(), Some("read" | "read_file"))
+                );
+
+                let content_for_display = if prev_is_read {
+                    split_read_file_header(&msg.content)
+                        .map(|(_, _, _, body)| body.to_string())
+                        .unwrap_or_else(|| msg.content.clone())
+                } else {
+                    msg.content.clone()
+                };
+
+                let preview: String = content_for_display.chars().take(200).collect();
+                let truncated = content_for_display.len() > 200;
                 let display = if truncated {
                     format!("{preview}…")
                 } else {
@@ -693,7 +723,25 @@ fn append_tool_result_block(
         content.split('\n').collect()
     };
 
-    for segment in segments {
+    let visible: Vec<usize> = if content.is_empty() {
+        vec![0]
+    } else {
+        segments
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, seg)| {
+                let has_nonempty_after = segments.iter().skip(idx + 1).any(|s| !s.is_empty());
+                if seg.is_empty() && !has_nonempty_after {
+                    None
+                } else {
+                    Some(idx)
+                }
+            })
+            .collect()
+    };
+
+    for seg_idx in visible {
+        let segment = segments[seg_idx];
         let chunks = wrap_str(segment, content_width);
         for chunk in chunks {
             out.push(Line::from(vec![
@@ -720,16 +768,34 @@ fn append_message_dim(
         content.split('\n').collect()
     };
 
-    let last_seg = segments.len() - 1;
+    let visible: Vec<usize> = if content.is_empty() {
+        vec![0]
+    } else {
+        segments
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, seg)| {
+                let has_nonempty_after = segments.iter().skip(idx + 1).any(|s| !s.is_empty());
+                if seg.is_empty() && !has_nonempty_after {
+                    None
+                } else {
+                    Some(idx)
+                }
+            })
+            .collect()
+    };
 
-    for (seg_idx, segment) in segments.iter().enumerate() {
-        let is_last_seg = seg_idx == last_seg;
+    let last_visible = visible.last().copied();
+
+    for seg_idx in visible {
+        let segment = segments[seg_idx];
+        let is_last_visible_seg = Some(seg_idx) == last_visible;
         let chunks = wrap_str(segment, width);
         let last_chunk = chunks.len() - 1;
 
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             let is_last_chunk = chunk_idx == last_chunk;
-            let show_suffix = !suffix.is_empty() && is_last_seg && is_last_chunk;
+            let show_suffix = !suffix.is_empty() && is_last_visible_seg && is_last_chunk;
 
             let mut spans: Vec<Span<'static>> = vec![Span::styled(chunk.clone(), dim_style)];
             if show_suffix {
@@ -760,20 +826,38 @@ fn append_message(
         content.split('\n').collect()
     };
 
-    let last_seg = segments.len() - 1;
+    let visible: Vec<usize> = if content.is_empty() {
+        vec![0]
+    } else {
+        segments
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, seg)| {
+                let has_nonempty_after = segments.iter().skip(idx + 1).any(|s| !s.is_empty());
+                if seg.is_empty() && !has_nonempty_after {
+                    None
+                } else {
+                    Some(idx)
+                }
+            })
+            .collect()
+    };
+
+    let last_visible = visible.last().copied();
 
     if user {
         out.push(halfblock_line(width, '▄', USER_BG));
     }
 
-    for (seg_idx, segment) in segments.iter().enumerate() {
-        let is_last_seg = seg_idx == last_seg;
+    for seg_idx in visible {
+        let segment = segments[seg_idx];
+        let is_last_visible_seg = Some(seg_idx) == last_visible;
         let chunks = wrap_str(segment, width);
         let last_chunk = chunks.len() - 1;
 
         for (chunk_idx, chunk) in chunks.iter().enumerate() {
             let is_last_chunk = chunk_idx == last_chunk;
-            let show_suffix = !suffix.is_empty() && is_last_seg && is_last_chunk;
+            let show_suffix = !suffix.is_empty() && is_last_visible_seg && is_last_chunk;
 
             if user {
                 // Pad to `width` so the background spans the full line.
@@ -795,6 +879,28 @@ fn append_message(
     if user {
         out.push(halfblock_line(width, '▀', USER_BG));
     }
+}
+
+fn split_read_file_header(content: &str) -> Option<(usize, usize, usize, &str)> {
+    let mut lines = content.lines();
+    let first = lines.next()?;
+
+    let rest = first.strip_prefix("[lines ")?;
+    let (range, total_with_bracket) = rest.split_once(" of ")?;
+    let total = total_with_bracket.strip_suffix(']')?.parse::<usize>().ok()?;
+    let (start, end) = range.split_once('-')?;
+    let start = start.parse::<usize>().ok()?;
+    let end = end.parse::<usize>().ok()?;
+
+    let header_len = first.len();
+    let body = if content.len() > header_len {
+        // Skip the trailing '\n' after the header when present.
+        content.get((header_len + 1)..).unwrap_or("")
+    } else {
+        ""
+    };
+
+    Some((start, end, total, body))
 }
 
 /// Split `text` into lines of at most `width` display columns, preserving
@@ -937,6 +1043,14 @@ mod tests {
     }
 
     #[test]
+    fn tool_result_block_omits_trailing_blank_line() {
+        let mut out = Vec::new();
+        append_tool_result_block(&mut out, "uptime output\n", 80, Color::Green);
+        assert_eq!(out.len(), 1);
+        assert_eq!(line_text(&out[0]), "│uptime output");
+    }
+
+    #[test]
     fn tool_result_block_wraps_and_keeps_prefix() {
         let mut out = Vec::new();
         append_tool_result_block(&mut out, "abcdef", 4, Color::Green);
@@ -946,5 +1060,20 @@ mod tests {
             assert!(text.starts_with('│'));
             assert!(unicode_width::UnicodeWidthStr::width(text.as_str()) <= 4);
         }
+    }
+
+    #[test]
+    fn split_read_file_header_parses_and_returns_body() {
+        let input = "[lines 10-20 of 300]\nalpha\nbeta";
+        let parsed = split_read_file_header(input).expect("expected header parse");
+        assert_eq!(parsed.0, 10);
+        assert_eq!(parsed.1, 20);
+        assert_eq!(parsed.2, 300);
+        assert_eq!(parsed.3, "alpha\nbeta");
+    }
+
+    #[test]
+    fn split_read_file_header_rejects_non_header() {
+        assert!(split_read_file_header("alpha\nbeta").is_none());
     }
 }

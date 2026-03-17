@@ -15,10 +15,10 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Run a shell command via `/bin/sh -c` and return its stdout, stderr, \
-         and exit code. Both stdout and stderr are truncated to 8 KiB each. \
-         The command is considered successful regardless of exit code — \
-         check the exit code in the output to determine success."
+        "Run a shell command via `/bin/sh -c` and return compact output. \
+         Stdout/stderr are emitted directly without section headings, and a \
+         non-zero exit code is appended as `exit N`. \
+         Both stdout and stderr are truncated to 8 KiB each."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -59,10 +59,9 @@ impl Tool for BashTool {
             let stdout = truncate_bytes(&output.stdout, MAX_OUTPUT_BYTES);
             let stderr = truncate_bytes(&output.stderr, MAX_OUTPUT_BYTES);
 
-            let mut result = format!("exit {exit_code}\n");
+            let mut result = String::new();
 
             if !stdout.is_empty() {
-                result.push_str("stdout:\n");
                 result.push_str(&stdout);
                 if !stdout.ends_with('\n') {
                     result.push('\n');
@@ -70,14 +69,17 @@ impl Tool for BashTool {
             }
 
             if !stderr.is_empty() {
-                result.push_str("stderr:\n");
                 result.push_str(&stderr);
                 if !stderr.ends_with('\n') {
                     result.push('\n');
                 }
             }
 
-            // is_error = false: the model sees the exit code and decides.
+            if exit_code != 0 {
+                result.push_str(&format!("exit {exit_code}\n"));
+            }
+
+            // is_error = false: the model sees output/exit code and decides.
             ToolResult::ok(result)
         })
     }
@@ -114,6 +116,11 @@ mod tests {
             "stdout not captured: {}",
             result.content
         );
+        assert!(
+            !result.content.contains("stdout:"),
+            "stdout heading should be omitted: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -127,6 +134,11 @@ mod tests {
             "stderr not captured: {}",
             result.content
         );
+        assert!(
+            !result.content.contains("stderr:"),
+            "stderr heading should be omitted: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -134,11 +146,25 @@ mod tests {
         let tool = BashTool;
         let args = serde_json::json!({"command": "exit 42"});
         let result = tool.execute(args).await;
-        // is_error stays false; the exit code is embedded in the content
+        // is_error stays false; non-zero exit code is embedded in the content
         assert!(!result.is_error);
         assert!(
             result.content.contains("exit 42"),
             "exit code not in output: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn bash_zero_exit_omits_exit_line() {
+        let tool = BashTool;
+        let args = serde_json::json!({"command": "echo ok"});
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        assert!(result.content.contains("ok"));
+        assert!(
+            !result.content.contains("exit 0"),
+            "should omit zero exit code: {}",
             result.content
         );
     }

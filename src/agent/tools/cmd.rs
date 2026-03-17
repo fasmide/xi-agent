@@ -15,10 +15,10 @@ impl Tool for CmdTool {
     }
 
     fn description(&self) -> &str {
-        "Run a command via `cmd.exe /C` and return stdout, stderr, and exit code. \
-         Both stdout and stderr are truncated to 8 KiB each. \
-         The command is considered successful regardless of exit code — \
-         check the exit code in the output to determine success."
+        "Run a command via `cmd.exe /C` and return compact output. \
+         Stdout/stderr are emitted directly without section headings, and a \
+         non-zero exit code is appended as `exit N`. \
+         Both stdout and stderr are truncated to 8 KiB each."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -58,10 +58,9 @@ impl Tool for CmdTool {
             let stdout = truncate_bytes(&output.stdout, MAX_OUTPUT_BYTES);
             let stderr = truncate_bytes(&output.stderr, MAX_OUTPUT_BYTES);
 
-            let mut result = format!("exit {exit_code}\n");
+            let mut result = String::new();
 
             if !stdout.is_empty() {
-                result.push_str("stdout:\n");
                 result.push_str(&stdout);
                 if !stdout.ends_with('\n') {
                     result.push('\n');
@@ -69,11 +68,14 @@ impl Tool for CmdTool {
             }
 
             if !stderr.is_empty() {
-                result.push_str("stderr:\n");
                 result.push_str(&stderr);
                 if !stderr.ends_with('\n') {
                     result.push('\n');
                 }
+            }
+
+            if exit_code != 0 {
+                result.push_str(&format!("exit {exit_code}\n"));
             }
 
             ToolResult::ok(result)
@@ -111,6 +113,7 @@ mod tests {
             "stdout not captured: {}",
             result.content
         );
+        assert!(!result.content.contains("stdout:"));
     }
 
     #[tokio::test]
@@ -124,5 +127,15 @@ mod tests {
             "exit code not in output: {}",
             result.content
         );
+    }
+
+    #[tokio::test]
+    async fn cmd_zero_exit_omits_exit_line() {
+        let tool = CmdTool;
+        let args = serde_json::json!({"command": "echo ok"});
+        let result = tool.execute(args).await;
+        assert!(!result.is_error);
+        assert!(result.content.to_lowercase().contains("ok"));
+        assert!(!result.content.contains("exit 0"));
     }
 }

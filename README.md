@@ -24,10 +24,9 @@ thinking output, and slash commands are all implemented. See
 - [x] SKILL.md support
 - [x] AGENTS.md support
 - [x] Session persistence (resume conversations)
+- [x] Steering (type messages while agent loop is running)
 
 High priority:
-
-- [ ] Steering
 
 Medium priority:
 
@@ -120,8 +119,8 @@ Environment variables:
 ## Keybindings
 
 | Key             | Action                          |
-|-----------------|---------------------------------|
-| `Enter`         | Submit message                  |
+|-----------------|-------------------------------|
+| `Enter`         | Submit message (or queue steering message if agent loop is running) |
 | `Shift+Enter`   | Insert newline in input         |
 | `Page Up`       | Scroll chat up one page         |
 | `Page Down`     | Scroll chat to bottom           |

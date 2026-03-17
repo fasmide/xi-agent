@@ -24,16 +24,24 @@ thinking output, and slash commands are all implemented. See
 - [x] SKILL.md support
 - [x] AGENTS.md support
 - [x] Session persistence (resume conversations)
-- [ ] Custom tools (user-defined, pluggable)
-- [ ] Platform credential storage
+
+High priority:
+
 - [ ] Steering
+- [ ] Custom tools (user-defined, pluggable)
+
+Medium priority:
+
+- [ ] Platform credential storage
 - [ ] Context compaction
 
 Low priority:
 
 - [ ] Markdown rendering (currently just raw text)
+- [ ] Anthropic provider support
+- [ ] Gemini provider support
 
-Currently out of scope:
+Out of scope (for now):
 
 - [-] Safety guardrails (tool use is unrestricted)
 

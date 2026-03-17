@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use futures_util::StreamExt;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::llm::{AssistantPhase, LlmEvent, LlmProvider, Message, ToolDefinition};
 
@@ -15,6 +15,20 @@ mod tests;
 pub use system_prompt::build_system_prompt;
 pub use types::{AgentEvent, AgentLoopConfig, ToolResult};
 
+fn drain_steering_messages(
+    steering_rx: &mut UnboundedReceiver<String>,
+    messages: &mut Vec<Message>,
+    tx: &UnboundedSender<AgentEvent>,
+) -> bool {
+    let mut consumed = false;
+    while let Ok(text) = steering_rx.try_recv() {
+        let _ = tx.send(AgentEvent::SteeringConsumed { text: text.clone() });
+        messages.push(Message::user(text));
+        consumed = true;
+    }
+    consumed
+}
+
 /// Run the agent loop: call the LLM, execute tool calls, repeat until the
 /// model gives a final text answer.
 ///
@@ -24,6 +38,7 @@ pub async fn run_agent_loop(
     config: AgentLoopConfig,
     provider: Arc<dyn LlmProvider>,
     tx: UnboundedSender<AgentEvent>,
+    mut steering_rx: UnboundedReceiver<String>,
 ) {
     // Build the tool definitions once from the registry.
     let tool_defs: Vec<ToolDefinition> = config
@@ -37,6 +52,9 @@ pub async fn run_agent_loop(
         .collect();
 
     loop {
+        // Insert queued steering messages before the next assistant turn.
+        let _ = drain_steering_messages(&mut steering_rx, &mut messages, &tx);
+
         // ── Stream the assistant response ─────────────────────────────────────
         let mut stream = provider.stream_chat_with_tools(messages.clone(), tool_defs.clone());
 
@@ -107,7 +125,8 @@ pub async fn run_agent_loop(
         }
 
         // ── Execute tool calls sequentially ───────────────────────────────────
-        for (id, name, args) in pending_tool_calls {
+        let mut stop_after_turn_for_steering = false;
+        for (idx, (id, name, args)) in pending_tool_calls.iter().cloned().enumerate() {
             let _ = tx.send(AgentEvent::ToolCallStart {
                 id: id.clone(),
                 name: name.clone(),
@@ -146,8 +165,35 @@ pub async fn run_agent_loop(
             // Append tool call + result to history for the next LLM turn.
             messages.push(Message::tool_call(&id, &name, args));
             messages.push(Message::tool_result(&id, &result.content, result.is_error));
+
+            // If steering arrived, consume it now and skip remaining tool calls.
+            if drain_steering_messages(&mut steering_rx, &mut messages, &tx) {
+                for (skip_id, skip_name, skip_args) in
+                    pending_tool_calls.iter().skip(idx + 1).cloned()
+                {
+                    let _ = tx.send(AgentEvent::ToolCallStart {
+                        id: skip_id.clone(),
+                        name: skip_name.clone(),
+                        args: skip_args.clone(),
+                    });
+                    let skipped = ToolResult::err("Skipped due to queued user message.");
+                    let _ = tx.send(AgentEvent::ToolCallEnd {
+                        id: skip_id.clone(),
+                        name: skip_name.clone(),
+                        result: skipped.clone(),
+                    });
+                    messages.push(Message::tool_call(&skip_id, &skip_name, skip_args));
+                    messages.push(Message::tool_result(&skip_id, &skipped.content, true));
+                }
+                stop_after_turn_for_steering = true;
+                break;
+            }
         }
 
         let _ = tx.send(AgentEvent::TurnEnd);
+
+        if stop_after_turn_for_steering {
+            continue;
+        }
     }
 }

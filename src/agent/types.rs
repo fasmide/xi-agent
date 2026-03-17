@@ -91,6 +91,8 @@ pub enum AgentEvent {
     ThinkingToken(String),
     /// The provider indicated that an assistant tool call is forthcoming.
     ToolIntentStart,
+    /// A queued steering message was consumed and inserted into loop history.
+    SteeringConsumed { text: String },
     // ── Tool lifecycle ─────────────────────────────────────────────────────────
     /// The model requested a tool call; execution is about to begin.
     ToolCallStart {

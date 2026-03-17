@@ -6,8 +6,6 @@ Items are grouped by priority.
 
 ## 🔴 High priority
 
-### Steering
-
 ---
 
 ## 🟡 Medium priority

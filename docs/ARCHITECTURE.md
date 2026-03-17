@@ -103,6 +103,7 @@ pub enum AgentEvent {
     TextToken { text: String, phase: AssistantPhase },
     ThinkingToken(String),
     ToolIntentStart,
+    SteeringConsumed { text: String },
     ToolCallStart { id, name, args },
     ToolCallEnd   { id, name, result: ToolResult },
     TurnEnd,
@@ -129,6 +130,12 @@ background styles (e.g. the grey user-message highlight).
 streaming task from the synchronous draw loop. The draw loop never awaits;
 it drains the channel non-blockingly on each tick, keeping the TUI
 responsive during long model responses.
+
+**Steering queue during streaming** — while a loop is active, Enter enqueues
+user steering text into a dedicated channel. The UI renders queued entries at
+the bottom with `🕹️` until the loop consumes them. On consumption, a
+`SteeringConsumed` event removes the pinned row and inserts the message into
+normal transcript order before the next assistant turn.
 
 **`LlmProvider` trait** — all provider-specific wire formats are contained
 in `llm/*.rs`. `agent/mod.rs`, `app.rs`, and `ui.rs` are provider-agnostic.

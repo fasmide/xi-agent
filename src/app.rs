@@ -137,6 +137,10 @@ pub struct App {
     /// Receives AgentEvents forwarded from the active agent loop task.
     pub(crate) event_rx: tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
     event_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    steering_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// User steering messages queued while a loop is running; rendered pinned
+    /// at the bottom of the log with a 🕹️ icon until consumed.
+    pub queued_steering: Vec<String>,
     /// JoinHandle for the currently running agent loop task (if any).
     agent_task: Option<JoinHandle<()>>,
     /// Receives model lists forwarded from `list_models` tasks.
@@ -209,6 +213,8 @@ impl App {
             ask_reply: None,
             event_rx,
             event_tx,
+            steering_tx: None,
+            queued_steering: Vec::new(),
             agent_task: None,
             models_rx,
             models_tx,
@@ -928,12 +934,51 @@ impl App {
     pub fn new_conversation(&mut self) {
         self.messages.clear();
         self.current_session_id = None;
+        self.queued_steering.clear();
+        self.steering_tx = None;
         self.reset_textarea();
         self.auto_scroll = true;
         self.refresh_resume_availability();
     }
 
     // ── LLM submission ────────────────────────────────────────────────────────
+
+    fn start_agent_task(&mut self, llm_messages: Vec<Message>, provider: &DynProvider) {
+        let config = AgentLoopConfig {
+            tools: self.agent_config.tools.clone(),
+            before_tool_call: None,
+            after_tool_call: None,
+        };
+        let (steering_tx, steering_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.steering_tx = Some(steering_tx);
+        self.queued_steering.clear();
+
+        let provider = Arc::clone(provider);
+        let tx = self.event_tx.clone();
+        self.agent_task = Some(tokio::spawn(async move {
+            run_agent_loop(llm_messages, config, provider, tx, steering_rx).await;
+        }));
+    }
+
+    /// Queue a user steering message while the agent loop is running.
+    pub fn enqueue_steering_from_input(&mut self) {
+        let lines: Vec<String> = self.textarea.lines().to_vec();
+        let text = lines.join("\n");
+        let trimmed = text.trim().to_string();
+        if trimmed.is_empty() || !self.streaming || self.login_active {
+            return;
+        }
+
+        let Some(tx) = self.steering_tx.as_ref() else {
+            return;
+        };
+
+        if tx.send(trimmed.clone()).is_ok() {
+            self.queued_steering.push(trimmed);
+            self.reset_textarea();
+            self.auto_scroll = true;
+        }
+    }
 
     /// Take the textarea content and start the agent loop.
     pub fn submit(&mut self, provider: &DynProvider) {
@@ -967,17 +1012,7 @@ impl App {
             llm_messages.pop();
         }
 
-        let config = AgentLoopConfig {
-            tools: self.agent_config.tools.clone(),
-            before_tool_call: None,
-            after_tool_call: None,
-        };
-
-        let provider = Arc::clone(provider);
-        let tx = self.event_tx.clone();
-        self.agent_task = Some(tokio::spawn(async move {
-            run_agent_loop(llm_messages, config, provider, tx).await;
-        }));
+        self.start_agent_task(llm_messages, provider);
     }
 
     /// Submit a pre-built text string directly to the agent loop, bypassing the
@@ -1003,17 +1038,7 @@ impl App {
             .chain(self.messages.iter().cloned())
             .collect();
 
-        let config = AgentLoopConfig {
-            tools: self.agent_config.tools.clone(),
-            before_tool_call: None,
-            after_tool_call: None,
-        };
-
-        let provider = Arc::clone(provider);
-        let tx = self.event_tx.clone();
-        self.agent_task = Some(tokio::spawn(async move {
-            run_agent_loop(llm_messages, config, provider, tx).await;
-        }));
+        self.start_agent_task(llm_messages, provider);
     }
 
     pub fn retry_last_request(&mut self, provider: &DynProvider) {
@@ -1039,23 +1064,15 @@ impl App {
             .chain(self.messages.iter().cloned())
             .collect();
 
-        let config = AgentLoopConfig {
-            tools: self.agent_config.tools.clone(),
-            before_tool_call: None,
-            after_tool_call: None,
-        };
-
-        let provider = Arc::clone(provider);
-        let tx = self.event_tx.clone();
-        self.agent_task = Some(tokio::spawn(async move {
-            run_agent_loop(llm_messages, config, provider, tx).await;
-        }));
+        self.start_agent_task(llm_messages, provider);
     }
 
     pub fn abort_agent_loop(&mut self) {
         if let Some(handle) = self.agent_task.take() {
             handle.abort();
             self.streaming = false;
+            self.steering_tx = None;
+            self.queued_steering.clear();
             self.messages
                 .push(Message::assistant("[agent loop aborted]"));
             self.persist_messages();
@@ -1108,6 +1125,12 @@ impl App {
                     last.assistant_phase = Some(AssistantPhase::Provisional);
                 }
             }
+            AgentEvent::SteeringConsumed { text } => {
+                self.messages.push(Message::user(text.clone()));
+                if let Some(pos) = self.queued_steering.iter().position(|m| m == &text) {
+                    self.queued_steering.remove(pos);
+                }
+            }
             AgentEvent::ToolCallStart { id, name, args } => {
                 self.messages.push(Message::tool_call(id, name, args));
             }
@@ -1125,10 +1148,14 @@ impl App {
             AgentEvent::Done => {
                 self.streaming = false;
                 self.agent_task = None;
+                self.steering_tx = None;
+                self.queued_steering.clear();
                 self.persist_messages();
             }
             AgentEvent::Error(e) => {
                 self.agent_task = None;
+                self.steering_tx = None;
+                self.queued_steering.clear();
                 let is_auth_401 = e.contains(" 401")
                     && (self.current_provider == "copilot" || self.current_provider == "codex");
 

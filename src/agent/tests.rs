@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use futures_util::stream;
 use tokio::sync::mpsc;
 
-use crate::agent::types::AgentEvent;
+use crate::agent::types::{AgentEvent, Tool};
 use crate::agent::{AgentLoopConfig, run_agent_loop};
 use crate::llm::{
     AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ToolDefinition,
@@ -45,18 +45,56 @@ impl LlmProvider for MockProvider {
     }
 }
 
+struct SlowTool;
+
+impl Tool for SlowTool {
+    fn name(&self) -> &str {
+        "slow_tool"
+    }
+
+    fn description(&self) -> &str {
+        "test slow tool"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "value": { "type": "string" }
+            }
+        })
+    }
+
+    fn execute(
+        &self,
+        args: serde_json::Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::agent::ToolResult> + Send + '_>>
+    {
+        let value = args
+            .get("value")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            crate::agent::ToolResult::ok(format!("slow:{value}"))
+        })
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Run the agent loop with the given provider and collect all emitted events.
 async fn run_and_collect(provider: MockProvider) -> Vec<AgentEvent> {
     let (tx, mut rx) = mpsc::unbounded_channel();
+    let (_steering_tx, steering_rx) = mpsc::unbounded_channel();
     let config = AgentLoopConfig {
         tools: HashMap::new(),
         before_tool_call: None,
         after_tool_call: None,
     };
     let messages = vec![Message::user("hi")];
-    run_agent_loop(messages, config, Arc::new(provider), tx).await;
+    run_agent_loop(messages, config, Arc::new(provider), tx, steering_rx).await;
     let mut events = Vec::new();
     while let Ok(ev) = rx.try_recv() {
         events.push(ev);
@@ -162,6 +200,78 @@ async fn agent_loop_forwards_tool_intent_before_tool_start() {
 }
 
 #[tokio::test]
+async fn steering_during_tool_batch_skips_remaining_tools() {
+    let provider = MockProvider::new(vec![
+        vec![
+            LlmEvent::ToolCall {
+                id: "call_1".to_string(),
+                name: "slow_tool".to_string(),
+                args: serde_json::json!({"value": "a"}),
+            },
+            LlmEvent::ToolCall {
+                id: "call_2".to_string(),
+                name: "slow_tool".to_string(),
+                args: serde_json::json!({"value": "b"}),
+            },
+            LlmEvent::Done,
+        ],
+        vec![
+            LlmEvent::Token {
+                text: "done".to_string(),
+                phase: AssistantPhase::Final,
+            },
+            LlmEvent::Done,
+        ],
+    ]);
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let (steering_tx, steering_rx) = mpsc::unbounded_channel();
+    let mut tools: HashMap<String, Arc<dyn Tool>> = HashMap::new();
+    tools.insert("slow_tool".to_string(), Arc::new(SlowTool));
+
+    let config = AgentLoopConfig {
+        tools,
+        before_tool_call: None,
+        after_tool_call: None,
+    };
+    let messages = vec![Message::user("hi")];
+
+    let handle = tokio::spawn(async move {
+        run_agent_loop(messages, config, Arc::new(provider), tx, steering_rx).await;
+    });
+
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    steering_tx
+        .send("interrupt".to_string())
+        .expect("queue steering");
+
+    handle.await.expect("agent loop join");
+
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::SteeringConsumed { text } if text == "interrupt")),
+        "expected SteeringConsumed event"
+    );
+
+    let skipped_second = events.iter().any(|e| {
+        matches!(
+            e,
+            AgentEvent::ToolCallEnd { id, result, .. }
+            if id == "call_2" && result.is_error && result.content.contains("Skipped due to queued user message")
+        )
+    });
+    assert!(skipped_second, "expected second tool call to be skipped");
+
+    assert!(matches!(events.last(), Some(AgentEvent::Done)));
+}
+
+#[tokio::test]
 async fn agent_loop_stream_error_is_reported() {
     let provider = MockProvider::new(vec![vec![LlmEvent::Error("boom".to_string())]]);
     let events = run_and_collect(provider).await;
@@ -202,7 +312,8 @@ async fn agent_loop_before_hook_blocks_tool() {
         after_tool_call: None,
     };
     let messages = vec![Message::user("hi")];
-    run_agent_loop(messages, config, Arc::new(provider), tx).await;
+    let (_steering_tx, steering_rx) = mpsc::unbounded_channel();
+    run_agent_loop(messages, config, Arc::new(provider), tx, steering_rx).await;
 
     let mut events = Vec::new();
     while let Ok(ev) = rx.try_recv() {

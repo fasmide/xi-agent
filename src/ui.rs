@@ -176,7 +176,12 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let pane_width = log_area.width as usize;
 
     // Pre-wrapped lines: each Line is exactly one visual row.
-    let mut lines = build_log_lines(&app.messages, app.streaming, pane_width);
+    let mut lines = build_log_lines(
+        &app.messages,
+        app.streaming,
+        &app.queued_steering,
+        pane_width,
+    );
 
     // Store log height for use as page size in the event loop.
     app.last_log_height = inner_height;
@@ -587,6 +592,7 @@ fn build_selection_lines(
 fn build_log_lines(
     messages: &[crate::llm::Message],
     streaming: bool,
+    queued_steering: &[String],
     width: usize,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -698,6 +704,10 @@ fn build_log_lines(
                 append_tool_result_block(&mut lines, &display, width, color);
             }
         }
+    }
+
+    for queued in queued_steering {
+        append_message(&mut lines, &format!("🕹️ {queued}"), "", width, false);
     }
 
     lines
@@ -1024,7 +1034,7 @@ mod tests {
     #[test]
     fn assistant_lines_are_prefixed_with_speech_bubble() {
         let messages = vec![Message::assistant("hello")];
-        let lines = build_log_lines(&messages, false, 80);
+        let lines = build_log_lines(&messages, false, &[], 80);
         assert_eq!(line_text(&lines[0]), "💬 hello");
     }
 
@@ -1032,7 +1042,7 @@ mod tests {
     fn assistant_provisional_phase_uses_thought_bubble() {
         let mut msg = Message::assistant("working");
         msg.assistant_phase = Some(AssistantPhase::Provisional);
-        let lines = build_log_lines(&[msg], false, 80);
+        let lines = build_log_lines(&[msg], false, &[], 80);
         assert_eq!(line_text(&lines[0]), "💭 working");
     }
 
@@ -1040,7 +1050,7 @@ mod tests {
     fn assistant_unknown_phase_streaming_uses_thought_bubble() {
         let mut msg = Message::assistant("streaming");
         msg.assistant_phase = Some(AssistantPhase::Unknown);
-        let lines = build_log_lines(&[msg], true, 80);
+        let lines = build_log_lines(&[msg], true, &[], 80);
         assert_eq!(line_text(&lines[0]), "💭 streaming▋");
     }
 
@@ -1049,9 +1059,20 @@ mod tests {
         let mut msg = Message::assistant("answer");
         msg.thinking = Some("planning".to_string());
         let messages = vec![msg];
-        let lines = build_log_lines(&messages, false, 80);
+        let lines = build_log_lines(&messages, false, &[], 80);
         assert_eq!(line_text(&lines[0]), "🧠 planning");
         assert_eq!(line_text(&lines[2]), "💬 answer");
+    }
+
+    #[test]
+    fn queued_steering_renders_with_joystick_at_bottom() {
+        let messages = vec![Message::assistant("done")];
+        let queued = vec!["wait, do this first".to_string()];
+        let lines = build_log_lines(&messages, false, &queued, 80);
+        assert_eq!(
+            line_text(lines.last().expect("expected line")),
+            "🕹️ wait, do this first"
+        );
     }
 
     #[test]

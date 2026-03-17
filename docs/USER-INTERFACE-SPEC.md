@@ -14,6 +14,7 @@
   - `💭` for provisional assistant output (tool intent/tool-calling turn)
   - `💬` for final assistant output
 - User input is a text input field at the bottom of the screen, where users can type commands and submit them by pressing Enter.
+- While the agent loop is running, Enter enqueues the typed text as a **steering message**. Queued steering messages are shown at the bottom of the chat log with a `🕹️` icon. When the agent loop consumes a steering message (at the first safe opportunity — before the next assistant turn, or after each tool execution), it is removed from the pinned area and inserted into the conversation as a regular user message in sequence.
 
 ## Login panel
 

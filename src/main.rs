@@ -544,6 +544,8 @@ async fn run(
                                         }
                                         None => {}
                                     }
+                                } else if app.streaming {
+                                    app.enqueue_steering_from_input();
                                 } else {
                                     app.submit(provider);
                                 }
@@ -703,9 +705,10 @@ async fn run_print_mode(
     };
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    let (_steering_tx, steering_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
     tokio::spawn(async move {
-        agent::run_agent_loop(messages, config, provider, tx).await;
+        agent::run_agent_loop(messages, config, provider, tx, steering_rx).await;
     });
 
     let mut exit_code = 0i32;
@@ -721,6 +724,9 @@ async fn run_print_mode(
                 // Suppress thinking tokens in print mode.
             }
             AgentEvent::ToolIntentStart => {
+                // No-op in print mode.
+            }
+            AgentEvent::SteeringConsumed { .. } => {
                 // No-op in print mode.
             }
             AgentEvent::ToolCallStart { name, args, .. } => {

@@ -27,6 +27,11 @@ thinking output, and slash commands are all implemented. See
 - [ ] Custom tools (user-defined, pluggable)
 - [ ] Platform credential storage
 - [ ] Steering
+- [ ] Context compaction
+
+Low priority:
+
+- [ ] Markdown rendering (currently just raw text)
 
 Currently out of scope:
 
@@ -48,8 +53,8 @@ cargo build --release
 | Provider         | Key / credential                                      | Config fields |
 |------------------|-------------------------------------------------------|---------------|
 | `copilot`        | tau auth store (`auth.toml` in platform config dir) | `[copilot].model` |
-| `openai`         | `OPENAI_API_KEY` (or preset-specific API key)        | `[openai].api_key`, `[openai].model` |
-| `codex`          | tau auth store (`auth.toml` in platform config dir) | `[codex].model` |
+| `openai`         | configure API key in `config.toml`                  | `[openai].api_key`, `[openai].base_url`, `[openai].model` |
+| `codex`          | tau auth store (`auth.toml` in platform config dir) | `[codex].base_url`, `[codex].model` |
 | `ollama`         | none (local)                                          | `[ollama].base_url`, `[ollama].model` |
 
 The default provider is `copilot`. Override at startup:
@@ -82,12 +87,14 @@ provider = "openai"
 
 [openai]
 api_key = "sk-..."
+base_url = "https://api.openai.com/v1"
 model = "gpt-4o-mini"
 
 [copilot]
 model = "gpt-4o"
 
 [codex]
+base_url = "https://chatgpt.com/backend-api/codex"
 model = "gpt-5.4"
 
 [ollama]
@@ -95,15 +102,11 @@ base_url = "http://localhost:11434"
 model = "llama3.1"
 ```
 
-Environment variables (credentials/transport only; provider/model selection is via CLI flags or `config.toml`):
+Environment variables:
 
-| Variable           | Description                        |
-|--------------------|------------------------------------|
-| `OPENAI_API_KEY`   | OpenAI API key                     |
-| `OLLAMA_BASE_URL`  | Ollama server base URL             |
-| `OPENAI_BASE_URL`  | OpenAI-compatible base URL override |
-| `CODEX_BASE_URL`   | Codex backend base URL override     |
-| `TAU_PRESET`      | OpenAI preset (`openrouter`, `groq`) |
+| Variable      | Description            |
+|---------------|------------------------|
+| `TAU_DEBUG`   | Enable debug logging   |
 
 ## CLI flags
 

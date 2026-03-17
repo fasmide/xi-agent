@@ -20,6 +20,7 @@ pub struct TauConfig {
 #[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize)]
 pub struct OpenAiConfig {
     pub api_key: Option<String>,
+    pub base_url: Option<String>,
     pub model: Option<String>,
 }
 
@@ -36,6 +37,7 @@ pub struct OllamaConfig {
 
 #[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize)]
 pub struct CodexConfig {
+    pub base_url: Option<String>,
     pub model: Option<String>,
 }
 
@@ -108,12 +110,14 @@ thinking = "low"
 
 [openai]
 api_key = "sk-test"
+base_url = "https://api.openai.com/v1"
 model = "gpt-4o-mini"
 
 [copilot]
 model = "gpt-4o"
 
 [codex]
+base_url = "https://chatgpt.com/backend-api/codex"
 model = "gpt-5"
 
 [ollama]
@@ -126,8 +130,16 @@ model = "llama3.1"
         assert_eq!(cfg.provider.as_deref(), Some("openai"));
         assert_eq!(cfg.thinking.as_deref(), Some("low"));
         assert_eq!(cfg.openai.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(
+            cfg.openai.base_url.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
         assert_eq!(cfg.openai.model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(cfg.copilot.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(
+            cfg.codex.base_url.as_deref(),
+            Some("https://chatgpt.com/backend-api/codex")
+        );
         assert_eq!(cfg.codex.model.as_deref(), Some("gpt-5"));
         assert_eq!(
             cfg.ollama.base_url.as_deref(),

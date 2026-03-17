@@ -39,36 +39,6 @@ impl OpenAiProvider {
         }
     }
 
-    /// Build from environment variables and named presets.
-    ///
-    /// Resolution order:
-    /// - `TAU_PRESET` selects a named preset (openrouter, groq) which
-    ///   sets the default base URL and the API-key env var.
-    /// - `OPENAI_BASE_URL` overrides the preset base URL.
-    /// - Preset key env var (e.g. `OPENROUTER_API_KEY`) is tried first,
-    ///   then `OPENAI_API_KEY`.
-    pub fn from_env() -> anyhow::Result<Self> {
-        let preset = std::env::var("TAU_PRESET").unwrap_or_default();
-
-        let (default_base_url, preset_key_var): (&str, &str) = match preset.as_str() {
-            "openrouter" => ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-            "groq" => ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
-            _ => ("https://api.openai.com/v1", "OPENAI_API_KEY"),
-        };
-
-        let base_url =
-            std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base_url.to_string());
-
-        // API key: preset-specific env var → OPENAI_API_KEY
-        let api_key = std::env::var(preset_key_var)
-            .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .map_err(|_| {
-                anyhow::anyhow!("Missing API key. Set {} or OPENAI_API_KEY.", preset_key_var)
-            })?;
-
-        Ok(Self::new(base_url, "gpt-4o", api_key))
-    }
-
     /// Clone this provider, replacing only the model name.
     pub fn with_model(&self, model: impl Into<String>) -> Self {
         Self {

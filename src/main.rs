@@ -636,17 +636,10 @@ fn persist_provider_model_selection(
 }
 
 fn resolve_thinking_level(config: &TauConfig) -> ThinkingLevel {
-    resolve_thinking_level_with_env(config, |k| std::env::var(k).ok())
-}
-
-fn resolve_thinking_level_with_env(
-    config: &TauConfig,
-    get_env: impl Fn(&str) -> Option<String>,
-) -> ThinkingLevel {
-    get_env("TAU_THINKING")
+    config
+        .thinking
         .as_deref()
         .and_then(ThinkingLevel::parse)
-        .or_else(|| config.thinking.as_deref().and_then(ThinkingLevel::parse))
         .unwrap_or(ThinkingLevel::Off)
 }
 
@@ -749,9 +742,8 @@ async fn run_print_mode(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_model, resolve_thinking_level_with_env};
+    use super::{resolve_model, resolve_thinking_level};
     use crate::{config::TauConfig, provider::ProviderKind, thinking::ThinkingLevel};
-    use std::collections::HashMap;
 
     #[test]
     fn resolve_model_prefers_cli_over_config() {
@@ -799,24 +791,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_thinking_prefers_env() {
-        let mut env = HashMap::new();
-        env.insert("TAU_THINKING".to_string(), "high".to_string());
-        let cfg = TauConfig {
-            thinking: Some("low".to_string()),
-            ..TauConfig::default()
-        };
-        let level = resolve_thinking_level_with_env(&cfg, |k| env.get(k).cloned());
-        assert_eq!(level, ThinkingLevel::High);
-    }
-
-    #[test]
-    fn resolve_thinking_falls_back_to_config() {
+    fn resolve_thinking_uses_config() {
         let cfg = TauConfig {
             thinking: Some("minimal".to_string()),
             ..TauConfig::default()
         };
-        let level = resolve_thinking_level_with_env(&cfg, |_| None);
+        let level = resolve_thinking_level(&cfg);
         assert_eq!(level, ThinkingLevel::Minimal);
+    }
+
+    #[test]
+    fn resolve_thinking_defaults_to_off() {
+        let cfg = TauConfig::default();
+        let level = resolve_thinking_level(&cfg);
+        assert_eq!(level, ThinkingLevel::Off);
     }
 }

@@ -240,26 +240,15 @@ pub fn build_provider(
             }
         }
         ProviderKind::OpenAi => {
-            let preset = std::env::var("TAU_PRESET").unwrap_or_default();
-            let (default_base_url, preset_key_var): (&str, &str) = match preset.as_str() {
-                "openrouter" => ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-                "groq" => ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
-                _ => ("https://api.openai.com/v1", "OPENAI_API_KEY"),
-            };
+            let base_url = config
+                .openai
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 
-            let base_url =
-                std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base_url.to_string());
-
-            let api_key = std::env::var(preset_key_var)
-                .or_else(|_| std::env::var("OPENAI_API_KEY"))
-                .ok()
-                .or_else(|| config.openai.api_key.clone())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Missing API key. Set {} / OPENAI_API_KEY or configure [openai].api_key.",
-                        preset_key_var
-                    )
-                })?;
+            let api_key = config.openai.api_key.clone().ok_or_else(|| {
+                anyhow::anyhow!("Missing API key. Configure [openai].api_key in config.toml.")
+            })?;
 
             let p = OpenAiProvider::new(base_url, model, api_key);
             Ok(Arc::new(p))
@@ -269,16 +258,20 @@ pub fn build_provider(
             let creds = store
                 .get_codex()
                 .ok_or_else(|| anyhow::anyhow!("Not authenticated for codex. Run /login codex."))?;
-            let base_url = std::env::var("CODEX_BASE_URL")
-                .unwrap_or_else(|_| CODEX_DEFAULT_BASE_URL.to_string());
+            let base_url = config
+                .codex
+                .base_url
+                .clone()
+                .unwrap_or_else(|| CODEX_DEFAULT_BASE_URL.to_string());
             let p = CodexProvider::new(base_url, model, creds.access_token, creds.account_id)
                 .with_reasoning_effort(thinking.to_reasoning_effort().map(ToString::to_string));
             Ok(Arc::new(p))
         }
         ProviderKind::Ollama => {
-            let base = std::env::var("OLLAMA_BASE_URL")
-                .ok()
-                .or_else(|| config.ollama.base_url.clone())
+            let base = config
+                .ollama
+                .base_url
+                .clone()
                 .unwrap_or_else(|| "http://localhost:11434".to_string());
             Ok(Arc::new(OllamaProvider::new(base, model.to_string())))
         }

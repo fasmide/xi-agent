@@ -48,7 +48,7 @@ cargo build --release
 | Provider         | Key / credential                                      | Config fields |
 |------------------|-------------------------------------------------------|---------------|
 | `copilot`        | tau auth store (`auth.toml` in platform config dir) | `[copilot].model` |
-| `openai`         | `OPENAI_API_KEY` (or preset-specific API key)        | `[openai].model` |
+| `openai`         | `OPENAI_API_KEY` (or preset-specific API key)        | `[openai].api_key`, `[openai].model` |
 | `codex`          | tau auth store (`auth.toml` in platform config dir) | `[codex].model` |
 | `ollama`         | none (local)                                          | `[ollama].base_url`, `[ollama].model` |
 
@@ -95,7 +95,7 @@ base_url = "http://localhost:11434"
 model = "llama3.1"
 ```
 
-Environment variables:
+Environment variables (credentials/transport only; provider/model selection is via CLI flags or `config.toml`):
 
 | Variable           | Description                        |
 |--------------------|------------------------------------|

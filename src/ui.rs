@@ -611,7 +611,7 @@ fn build_log_lines(
 
                 // Render thinking block (if any thinking content has arrived).
                 if !thinking.is_empty() {
-                    append_message_dim(&mut lines, thinking, "", width);
+                    append_message_dim(&mut lines, &format!("🧠 {thinking}"), "", width);
                     // Separator between thinking and answer is lazy: only render
                     // when an answer line will actually be shown.
                     if has_answer {
@@ -624,9 +624,9 @@ fn build_log_lines(
                 // whenever this is the active streaming message.
                 if has_answer {
                     let content = if is_streaming_last && msg.content.is_empty() {
-                        "▋".to_string()
+                        "💬 ▋".to_string()
                     } else {
-                        msg.content.clone()
+                        format!("💬 {}", msg.content)
                     };
                     let suffix = if is_streaming_last && !msg.content.is_empty() {
                         "▋"
@@ -650,7 +650,7 @@ fn build_log_lines(
                     && next.role == Role::ToolResult
                     && let Some((start, end, total, _)) = split_read_file_header(&next.content)
                 {
-                    label.push_str(&format!(" [{start}-{end}/{total}]") );
+                    label.push_str(&format!(" [{start}-{end}/{total}]"));
                 }
 
                 append_message_colored(&mut lines, &label, width, Color::Cyan);
@@ -712,7 +712,10 @@ fn append_tool_result_block(
     let text_style = Style::default().fg(color);
 
     if width == 0 {
-        out.push(Line::from(vec![Span::styled("│".to_string(), marker_style)]));
+        out.push(Line::from(vec![Span::styled(
+            "│".to_string(),
+            marker_style,
+        )]));
         return;
     }
 
@@ -887,7 +890,10 @@ fn split_read_file_header(content: &str) -> Option<(usize, usize, usize, &str)> 
 
     let rest = first.strip_prefix("[lines ")?;
     let (range, total_with_bracket) = rest.split_once(" of ")?;
-    let total = total_with_bracket.strip_suffix(']')?.parse::<usize>().ok()?;
+    let total = total_with_bracket
+        .strip_suffix(']')?
+        .parse::<usize>()
+        .ok()?;
     let (start, end) = range.split_once('-')?;
     let start = start.parse::<usize>().ok()?;
     let end = end.parse::<usize>().ok()?;
@@ -994,12 +1000,30 @@ fn format_context_size(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::Message;
 
     fn line_text(line: &Line<'_>) -> String {
         line.spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    #[test]
+    fn assistant_lines_are_prefixed_with_speech_bubble() {
+        let messages = vec![Message::assistant("hello")];
+        let lines = build_log_lines(&messages, false, 80);
+        assert_eq!(line_text(&lines[0]), "💬 hello");
+    }
+
+    #[test]
+    fn assistant_thinking_is_prefixed_with_brain() {
+        let mut msg = Message::assistant("answer");
+        msg.thinking = Some("planning".to_string());
+        let messages = vec![msg];
+        let lines = build_log_lines(&messages, false, 80);
+        assert_eq!(line_text(&lines[0]), "🧠 planning");
+        assert_eq!(line_text(&lines[2]), "💬 answer");
     }
 
     #[test]

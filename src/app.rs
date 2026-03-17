@@ -15,6 +15,7 @@ use crate::{
     provider::ProviderKind,
     session::SessionStore,
     skills::SkillMeta,
+    thinking::ThinkingLevel,
 };
 
 // ── Selection result ──────────────────────────────────────────────────────────
@@ -37,6 +38,15 @@ struct PendingAsk {
 /// Maximum number of rows shown in the selection menu before scrolling.
 pub const MAX_SELECTION_VISIBLE: usize = 12;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionKind {
+    Model,
+    Provider,
+    LoginProvider,
+    ResumeSession,
+    AskUser,
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct App {
@@ -54,6 +64,8 @@ pub struct App {
     pub current_model: String,
     /// Currently active provider name (e.g. `"copilot"`).
     pub current_provider: String,
+    /// Currently active thinking / reasoning level.
+    pub current_thinking: ThinkingLevel,
     /// Agent loop configuration (tools, hooks, max_turns).
     pub agent_config: AgentLoopConfig,
     /// Skills loaded from all supported skill roots.
@@ -78,6 +90,12 @@ pub struct App {
     pub selection_title: &'static str,
     /// Items shown in the selection menu.
     pub selection_items: Vec<CompletionItem>,
+    /// Unfiltered source items for selection search.
+    selection_all_items: Vec<CompletionItem>,
+    /// Current search query for selection filtering.
+    pub selection_query: String,
+    /// Kind of selection currently being displayed.
+    selection_kind: Option<SelectionKind>,
     /// Index of the currently highlighted selection row.
     pub selection_selected: usize,
     /// First visible item index in the selection menu (scroll offset).
@@ -136,6 +154,7 @@ impl App {
     pub fn new(
         initial_model: impl Into<String>,
         initial_provider: &ProviderKind,
+        initial_thinking: ThinkingLevel,
         agent_config: AgentLoopConfig,
     ) -> Self {
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -152,6 +171,7 @@ impl App {
             system_prompt: None,
             current_model: initial_model.into(),
             current_provider: initial_provider.name().to_string(),
+            current_thinking: initial_thinking,
             agent_config,
             loaded_skills: Vec::new(),
             completions: Vec::new(),
@@ -161,6 +181,9 @@ impl App {
             selection_mode: false,
             selection_title: "Select model",
             selection_items: Vec::new(),
+            selection_all_items: Vec::new(),
+            selection_query: String::new(),
+            selection_kind: None,
             selection_selected: 0,
             selection_scroll: 0,
             show_info: false,
@@ -261,17 +284,17 @@ impl App {
     pub fn enter_resume_selection_mode(&mut self) {
         self.reset_textarea();
         self.selection_mode = true;
+        self.selection_kind = Some(SelectionKind::ResumeSession);
         self.selection_title = "  Resume session  ";
-        self.selection_selected = 0;
-        self.selection_scroll = 0;
+        self.selection_query.clear();
 
         let Some(store) = self.session_store.as_ref() else {
-            self.selection_items = vec![CompletionItem {
+            self.set_selection_items(vec![CompletionItem {
                 label: "session persistence unavailable".to_string(),
                 detail: String::new(),
                 complete_to: String::new(),
                 loading: true,
-            }];
+            }]);
             return;
         };
 
@@ -285,16 +308,16 @@ impl App {
         });
 
         if sessions.is_empty() {
-            self.selection_items = vec![CompletionItem {
+            self.set_selection_items(vec![CompletionItem {
                 label: "no saved sessions yet".to_string(),
                 detail: String::new(),
                 complete_to: String::new(),
                 loading: true,
-            }];
+            }]);
             return;
         }
 
-        self.selection_items = sessions
+        let items = sessions
             .iter()
             .map(|meta| {
                 let is_local = meta.cwd == self.current_cwd;
@@ -312,6 +335,7 @@ impl App {
                 }
             })
             .collect();
+        self.set_selection_items(items);
     }
 
     fn make_textarea() -> TextArea<'static> {
@@ -378,18 +402,19 @@ impl App {
         self.available_models = Some(models);
         self.models_loading = false;
         self.update_completions();
-        // Populate (or refresh) the selection menu if it is currently showing models.
-        if self.selection_mode
-            && let Some(ref all) = self.available_models.clone()
-        {
-            let items: Vec<_> = all
+
+        if self.selection_mode && self.selection_kind == Some(SelectionKind::Model) {
+            let items: Vec<_> = self
+                .available_models
+                .as_deref()
+                .unwrap_or(&[])
                 .iter()
                 .map(|m| commands::CompletionItem::from_model(m))
                 .collect();
-            if items.iter().any(|i| !i.loading) {
-                self.selection_items = items;
-                if self.selection_selected >= self.selection_items.len() {
-                    self.selection_selected = 0;
+            if !items.is_empty() {
+                self.set_selection_items(items);
+                if self.selection_query.trim().is_empty() {
+                    self.select_current_default();
                 }
             }
         }
@@ -426,15 +451,85 @@ impl App {
 
     // ── Selection menu ────────────────────────────────────────────────────────
 
+    fn set_selection_items(&mut self, items: Vec<CompletionItem>) {
+        self.selection_all_items = items;
+        self.selection_selected = 0;
+        self.selection_scroll = 0;
+        self.apply_selection_filter();
+    }
+
+    fn select_current_default(&mut self) {
+        let target = match self.selection_kind {
+            Some(SelectionKind::Model) => Some(format!("/model {}", self.current_model)),
+            Some(SelectionKind::Provider) => Some(format!("/provider {}", self.current_provider)),
+            Some(SelectionKind::LoginProvider)
+            | Some(SelectionKind::ResumeSession)
+            | Some(SelectionKind::AskUser)
+            | None => None,
+        };
+
+        if let Some(target) = target
+            && let Some(idx) = self
+                .selection_items
+                .iter()
+                .position(|item| item.complete_to == target)
+        {
+            self.selection_selected = idx;
+            self.ensure_selection_visible();
+        }
+    }
+
+    fn apply_selection_filter(&mut self) {
+        let query = self.selection_query.trim();
+        if query.is_empty() {
+            self.selection_items = self.selection_all_items.clone();
+        } else {
+            let needle = query.to_lowercase();
+            self.selection_items = self
+                .selection_all_items
+                .iter()
+                .filter(|item| {
+                    item.label.to_lowercase().contains(&needle)
+                        || item.detail.to_lowercase().contains(&needle)
+                })
+                .cloned()
+                .collect();
+        }
+
+        if self.selection_items.is_empty() {
+            self.selection_selected = 0;
+            self.selection_scroll = 0;
+            return;
+        }
+
+        if self.selection_selected >= self.selection_items.len() {
+            self.selection_selected = 0;
+        }
+        self.ensure_selection_visible();
+    }
+
+    fn ensure_selection_visible(&mut self) {
+        if self.selection_items.is_empty() {
+            self.selection_scroll = 0;
+            return;
+        }
+        if self.selection_selected < self.selection_scroll {
+            self.selection_scroll = self.selection_selected;
+        }
+        if self.selection_selected >= self.selection_scroll + MAX_SELECTION_VISIBLE {
+            self.selection_scroll = self.selection_selected + 1 - MAX_SELECTION_VISIBLE;
+        }
+    }
+
     /// Open the model selection menu, pre-populating from cache or showing a
     /// loading indicator when the list hasn't been fetched yet.
     pub fn enter_model_selection_mode(&mut self) {
         self.reset_textarea();
         self.selection_mode = true;
+        self.selection_kind = Some(SelectionKind::Model);
         self.selection_title = "  Select model  ";
-        self.selection_selected = 0;
-        self.selection_scroll = 0;
-        self.selection_items = if let Some(models) = &self.available_models {
+        self.selection_query.clear();
+        let items = if let Some(models) = &self.available_models {
             models
                 .iter()
                 .map(|m| CompletionItem::from_model(m))
@@ -442,29 +537,32 @@ impl App {
         } else {
             vec![CompletionItem::loading_indicator()]
         };
+        self.set_selection_items(items);
+        self.select_current_default();
     }
 
     /// Open the provider selection menu with the fixed list of known providers.
     pub fn enter_provider_selection_mode(&mut self) {
         self.reset_textarea();
         self.selection_mode = true;
+        self.selection_kind = Some(SelectionKind::Provider);
         self.selection_title = "  Select provider  ";
-        self.selection_selected = 0;
-        self.selection_scroll = 0;
-        self.selection_items = ProviderKind::all()
+        let items = ProviderKind::all()
             .iter()
             .map(|p| CompletionItem::from_provider(p.name(), p.label()))
             .collect();
+        self.set_selection_items(items);
+        self.select_current_default();
     }
 
     /// Open provider picker for `/login` command.
     pub fn enter_login_selection_mode(&mut self) {
         self.reset_textarea();
         self.selection_mode = true;
+        self.selection_kind = Some(SelectionKind::LoginProvider);
         self.selection_title = "  Login provider  ";
-        self.selection_selected = 0;
-        self.selection_scroll = 0;
-        self.selection_items = ["copilot", "codex"]
+        self.selection_query.clear();
+        let items = ["copilot", "codex"]
             .iter()
             .map(|p| CompletionItem {
                 label: (*p).to_string(),
@@ -473,12 +571,16 @@ impl App {
                 loading: false,
             })
             .collect();
+        self.set_selection_items(items);
     }
 
     /// Dismiss the selection menu without applying a choice.
     pub fn exit_selection_mode(&mut self) {
         self.selection_mode = false;
+        self.selection_kind = None;
         self.selection_items.clear();
+        self.selection_all_items.clear();
+        self.selection_query.clear();
         self.selection_selected = 0;
         self.selection_scroll = 0;
     }
@@ -488,8 +590,19 @@ impl App {
     pub fn should_fetch_models_for_selection(&self) -> bool {
         // Only fetch if the menu shows the loading indicator (model menu).
         self.selection_mode
+            && self.selection_kind == Some(SelectionKind::Model)
             && self.selection_items.iter().any(|i| i.loading)
             && !self.models_loading
+    }
+
+    pub fn selection_add_char(&mut self, c: char) {
+        self.selection_query.push(c);
+        self.apply_selection_filter();
+    }
+
+    pub fn selection_backspace(&mut self) {
+        self.selection_query.pop();
+        self.apply_selection_filter();
     }
 
     /// Navigate the selection menu down (wraps around).
@@ -497,13 +610,10 @@ impl App {
         let len = self.selection_items.len();
         if len > 0 {
             self.selection_selected = (self.selection_selected + 1) % len;
-            // Scroll down if the newly selected item is below the visible window.
-            if self.selection_selected >= self.selection_scroll + MAX_SELECTION_VISIBLE {
-                self.selection_scroll = self.selection_selected + 1 - MAX_SELECTION_VISIBLE;
-            }
-            // Wrap-around: if we jumped back to 0 reset the scroll too.
             if self.selection_selected == 0 {
                 self.selection_scroll = 0;
+            } else {
+                self.ensure_selection_visible();
             }
         }
     }
@@ -513,40 +623,49 @@ impl App {
         let len = self.selection_items.len();
         if len > 0 {
             self.selection_selected = (self.selection_selected + len - 1) % len;
-            // Scroll up if the newly selected item is above the visible window.
-            if self.selection_selected < self.selection_scroll {
-                self.selection_scroll = self.selection_selected;
-            }
-            // Wrap-around: if we jumped to the last item, scroll to show it.
             if self.selection_selected == len - 1 {
                 self.selection_scroll = len.saturating_sub(MAX_SELECTION_VISIBLE);
+            } else {
+                self.ensure_selection_visible();
             }
         }
     }
 
     /// Confirm the currently highlighted selection.
-    /// Parses the `complete_to` string to tell model choices from provider
-    /// choices apart, so both can share the same UI widget.
     pub fn apply_selection(&mut self) -> Option<SelectionResult> {
         let item = self.selection_items.get(self.selection_selected)?;
         if item.loading || item.complete_to.is_empty() {
             return None;
         }
-        let result = if let Some(name) = item.complete_to.strip_prefix("/provider ") {
-            SelectionResult::Provider(name.to_string())
-        } else if let Some(name) = item.complete_to.strip_prefix("/model ") {
-            SelectionResult::Model(name.to_string())
-        } else if let Some(name) = item.complete_to.strip_prefix("/login ") {
-            SelectionResult::LoginProvider(name.to_string())
-        } else if let Some(id) = item.complete_to.strip_prefix("/resume_session ") {
-            SelectionResult::ResumeSession(id.to_string())
-        } else if let Some(name) = item.complete_to.strip_prefix("/ask_user_option ") {
-            SelectionResult::AskOption(name.to_string())
-        } else if item.complete_to == "/ask_user_freeform" {
-            SelectionResult::AskFreeform
-        } else {
-            return None;
-        };
+
+        let result = match self.selection_kind {
+            Some(SelectionKind::Model) => item
+                .complete_to
+                .strip_prefix("/model ")
+                .map(|name| SelectionResult::Model(name.to_string())),
+            Some(SelectionKind::Provider) => item
+                .complete_to
+                .strip_prefix("/provider ")
+                .map(|name| SelectionResult::Provider(name.to_string())),
+            Some(SelectionKind::LoginProvider) => item
+                .complete_to
+                .strip_prefix("/login ")
+                .map(|name| SelectionResult::LoginProvider(name.to_string())),
+            Some(SelectionKind::ResumeSession) => item
+                .complete_to
+                .strip_prefix("/resume_session ")
+                .map(|id| SelectionResult::ResumeSession(id.to_string())),
+            Some(SelectionKind::AskUser) => item
+                .complete_to
+                .strip_prefix("/ask_user_option ")
+                .map(|name| SelectionResult::AskOption(name.to_string()))
+                .or_else(|| {
+                    (item.complete_to == "/ask_user_freeform")
+                        .then_some(SelectionResult::AskFreeform)
+                }),
+            None => None,
+        }?;
+
         self.exit_selection_mode();
         Some(result)
     }
@@ -603,11 +722,11 @@ impl App {
 
         self.reset_textarea();
         self.selection_mode = true;
+        self.selection_kind = Some(SelectionKind::AskUser);
         self.selection_title = "  Ask user  ";
-        self.selection_selected = 0;
-        self.selection_scroll = 0;
+        self.selection_query.clear();
 
-        self.selection_items = options
+        let mut items: Vec<CompletionItem> = options
             .iter()
             .map(|opt| CompletionItem {
                 label: opt.title.clone(),
@@ -618,13 +737,15 @@ impl App {
             .collect();
 
         if allow_freeform {
-            self.selection_items.push(CompletionItem {
+            items.push(CompletionItem {
                 label: "Type a custom response…".to_string(),
                 detail: String::new(),
                 complete_to: "/ask_user_freeform".to_string(),
                 loading: false,
             });
         }
+
+        self.set_selection_items(items);
     }
 
     pub fn enter_ask_freeform_mode(&mut self) {

@@ -114,7 +114,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         0
     };
     let selection_items_height: u16 = if app.selection_mode && !app.login_active {
-        app.selection_items.len().min(MAX_SELECTION_VISIBLE) as u16
+        app.selection_items.len().clamp(1, MAX_SELECTION_VISIBLE) as u16
     } else {
         0
     };
@@ -238,9 +238,15 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // ── Selection menu ────────────────────────────────────────────────────────
     if app.selection_mode && !app.login_active {
         // Header row: title on the left, key hints on the right.
-        const HINTS: &str = "↑↓ navigate   Enter select   Esc cancel  ";
+        const HINTS: &str = "↑↓ navigate   type filter   Enter select   Esc cancel  ";
         let title = app.selection_title;
-        let gap = width.saturating_sub(title.width() + HINTS.width());
+        let query = if app.selection_query.is_empty() {
+            "".to_string()
+        } else {
+            format!("filter: {}", app.selection_query)
+        };
+        let query_width = query.width();
+        let gap = width.saturating_sub(title.width() + query_width + HINTS.width());
         let header_line = Line::from(vec![
             Span::styled(
                 title,
@@ -251,6 +257,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             ),
             Span::styled(" ".repeat(gap), Style::default().bg(SELECTION_HEADER_BG)),
             Span::styled(
+                query,
+                Style::default().fg(Color::Yellow).bg(SELECTION_HEADER_BG),
+            ),
+            Span::styled(
                 HINTS,
                 Style::default().fg(Color::DarkGray).bg(SELECTION_HEADER_BG),
             ),
@@ -259,12 +269,25 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
         // Item rows.
         if selection_items_height > 0 {
-            let item_lines = build_selection_lines(
-                &app.selection_items,
-                app.selection_selected,
-                app.selection_scroll,
-                width,
-            );
+            let item_lines = if app.selection_items.is_empty() {
+                vec![Line::from(vec![
+                    Span::styled("  ", Style::default().bg(SELECTION_BG)),
+                    Span::styled(
+                        "no matches",
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .bg(SELECTION_BG)
+                            .add_modifier(ratatui::style::Modifier::ITALIC),
+                    ),
+                ])]
+            } else {
+                build_selection_lines(
+                    &app.selection_items,
+                    app.selection_selected,
+                    app.selection_scroll,
+                    width,
+                )
+            };
             f.render_widget(Paragraph::new(item_lines), sel_items_area);
 
             // Scrollbar when the list is longer than the visible window.
@@ -337,7 +360,13 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             Some(n) => format_context_size(n),
             None => "unknown".to_string(),
         };
-        let info_line = build_info_line(&app.current_provider, &app.current_model, &ctx_str, width);
+        let info_line = build_info_line(
+            &app.current_provider,
+            &app.current_model,
+            app.current_thinking.as_str(),
+            &ctx_str,
+            width,
+        );
         f.render_widget(Paragraph::new(vec![info_line]), info_area);
     }
 }
@@ -759,7 +788,13 @@ fn wrap_str(text: &str, width: usize) -> Vec<String> {
 const INFO_BG: Color = Color::Rgb(20, 20, 30);
 
 /// Build the single info-bar `Line` showing provider / model / context window.
-fn build_info_line<'a>(provider: &str, model: &str, ctx: &str, width: usize) -> Line<'a> {
+fn build_info_line<'a>(
+    provider: &str,
+    model: &str,
+    thinking: &str,
+    ctx: &str,
+    width: usize,
+) -> Line<'a> {
     let sep_style = Style::default().fg(Color::Rgb(60, 60, 80)).bg(INFO_BG);
     let key_style = Style::default().fg(Color::Rgb(100, 100, 130)).bg(INFO_BG);
     let val_style = Style::default().fg(Color::Rgb(180, 200, 255)).bg(INFO_BG);
@@ -778,6 +813,10 @@ fn build_info_line<'a>(provider: &str, model: &str, ctx: &str, width: usize) -> 
         Span::styled(" ", fill_style),
         Span::styled(model.to_string(), val_style),
         Span::styled("  │  ", sep_style),
+        Span::styled("thinking", key_style),
+        Span::styled(" ", fill_style),
+        Span::styled(thinking.to_string(), val_style),
+        Span::styled("  │  ", sep_style),
         Span::styled("context", key_style),
         Span::styled(" ", fill_style),
         Span::styled(format!("{ctx} tokens"), val_style),
@@ -788,6 +827,8 @@ fn build_info_line<'a>(provider: &str, model: &str, ctx: &str, width: usize) -> 
         + "provider".len() + 1 + provider.len()
         + 5 // sep
         + "model".len() + 1 + model.len()
+        + 5 // sep
+        + "thinking".len() + 1 + thinking.len()
         + 5 // sep
         + "context".len() + 1 + ctx.len() + " tokens".len();
 

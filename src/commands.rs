@@ -1,4 +1,5 @@
 use crate::skills::SkillMeta;
+use crate::thinking::ThinkingLevel;
 
 /// A slash command supported by the application.
 pub struct SlashCommand {
@@ -31,6 +32,12 @@ pub static COMMANDS: &[SlashCommand] = &[
         takes_arg: true,
     },
     SlashCommand {
+        name: "thinking",
+        usage: "/thinking <off|minimal|low|medium|high|xhigh>",
+        description: "Set reasoning effort for supported models/providers",
+        takes_arg: true,
+    },
+    SlashCommand {
         name: "login",
         usage: "/login <provider>",
         description: "Authenticate provider (copilot / codex)",
@@ -53,6 +60,7 @@ pub static COMMANDS: &[SlashCommand] = &[
 // ── Completion items ──────────────────────────────────────────────────────────
 
 /// A single entry in the completion popup.
+#[derive(Clone)]
 pub struct CompletionItem {
     /// Primary text shown in the left column (command usage or model name).
     pub label: String,
@@ -180,6 +188,17 @@ pub fn completions_for(
                         loading: false,
                     })
                     .collect(),
+                "thinking" => ThinkingLevel::all()
+                    .iter()
+                    .map(|lvl| lvl.as_str())
+                    .filter(|lvl| lvl.starts_with(arg))
+                    .map(|lvl| CompletionItem {
+                        label: lvl.to_string(),
+                        detail: String::new(),
+                        complete_to: format!("/thinking {lvl}"),
+                        loading: false,
+                    })
+                    .collect(),
                 _ => vec![],
             }
         }
@@ -240,8 +259,12 @@ pub enum CommandAction {
     ProviderNoArg,
     /// Authenticate with provider by name (`copilot`, `codex`).
     Login(String),
+    /// Set thinking/reasoning level.
+    Thinking(String),
     /// `/login` with no argument — show login provider picker.
     LoginNoArg,
+    /// `/thinking` with no argument.
+    ThinkingNoArg,
     /// Resume a specific session by id (internal command form).
     Resume(String),
     /// `/resume` with no argument — show session picker.
@@ -280,6 +303,8 @@ pub fn parse(input: &str) -> Option<CommandAction> {
         "model" => Some(CommandAction::ModelNoArg),
         "provider" if !arg.is_empty() => Some(CommandAction::Provider(arg.to_string())),
         "provider" => Some(CommandAction::ProviderNoArg),
+        "thinking" if !arg.is_empty() => Some(CommandAction::Thinking(arg.to_string())),
+        "thinking" => Some(CommandAction::ThinkingNoArg),
         "login" if !arg.is_empty() => Some(CommandAction::Login(arg.to_string())),
         "login" => Some(CommandAction::LoginNoArg),
         "resume" if !arg.is_empty() => Some(CommandAction::Resume(arg.to_string())),

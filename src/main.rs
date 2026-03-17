@@ -24,6 +24,7 @@ mod llm;
 mod provider;
 mod session;
 mod skills;
+mod thinking;
 mod tool_presentation;
 mod ui;
 
@@ -32,7 +33,8 @@ use app::{App, SelectionResult};
 use commands::CommandAction;
 use config::TauConfig;
 use llm::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture};
-use provider::{ProviderKind, build_provider};
+use provider::{ProviderKind, ThinkingSupport, build_provider, thinking_support_for};
+use thinking::ThinkingLevel;
 
 // ── CLI definition ────────────────────────────────────────────────────────────
 
@@ -89,6 +91,7 @@ async fn main() -> io::Result<()> {
 
     // Priority: --model flag > env vars > config.toml > provider default.
     let mut current_model = resolve_model(cli.model.as_deref(), &current_kind, &config);
+    let mut current_thinking = resolve_thinking_level(&config);
 
     let window_folder = std::env::current_dir()
         .ok()
@@ -125,6 +128,7 @@ async fn main() -> io::Result<()> {
     let mut app = App::new(
         &current_model,
         &current_kind,
+        current_thinking,
         AgentLoopConfig {
             tools: std::collections::HashMap::new(),
             before_tool_call: None,
@@ -143,23 +147,26 @@ async fn main() -> io::Result<()> {
     app.agent_config.tools = tools;
     app.system_prompt = Some(system_prompt);
     app.loaded_skills = loaded_skills;
+    maybe_warn_thinking_unsupported(&mut app, &current_kind, &current_model, current_thinking);
 
     loop {
         // Build (or re-build) the provider for the current kind + model.
-        let provider = match build_provider(&current_kind, &current_model, &config) {
-            Ok(p) => p,
-            Err(e) => {
-                let msg = format!("[provider unavailable: {e}]");
-                log::debug!(
-                    "provider build failed: provider={} model={} err={}",
-                    current_kind.name(),
-                    current_model,
-                    e
-                );
-                app.messages.push(llm::Message::assistant(msg.clone()));
-                Arc::new(UnavailableProvider { message: msg }) as Arc<dyn LlmProvider + Send + Sync>
-            }
-        };
+        let provider =
+            match build_provider(&current_kind, &current_model, current_thinking, &config) {
+                Ok(p) => p,
+                Err(e) => {
+                    let msg = format!("[provider unavailable: {e}]");
+                    log::debug!(
+                        "provider build failed: provider={} model={} err={}",
+                        current_kind.name(),
+                        current_model,
+                        e
+                    );
+                    app.messages.push(llm::Message::assistant(msg.clone()));
+                    Arc::new(UnavailableProvider { message: msg })
+                        as Arc<dyn LlmProvider + Send + Sync>
+                }
+            };
 
         if app.retry_after_refresh {
             app.retry_after_refresh = false;
@@ -180,7 +187,14 @@ async fn main() -> io::Result<()> {
                     &mut config,
                     &current_kind,
                     &current_model,
+                    current_thinking,
                     &mut app,
+                );
+                maybe_warn_thinking_unsupported(
+                    &mut app,
+                    &current_kind,
+                    &current_model,
+                    current_thinking,
                 );
             }
 
@@ -195,10 +209,35 @@ async fn main() -> io::Result<()> {
                         &mut config,
                         &current_kind,
                         &current_model,
+                        current_thinking,
                         &mut app,
+                    );
+                    maybe_warn_thinking_unsupported(
+                        &mut app,
+                        &current_kind,
+                        &current_model,
+                        current_thinking,
                     );
                 }
                 // Unknown name: silently ignore and loop (provider unchanged).
+            }
+
+            Ok(RunResult::ChangeThinking(level)) => {
+                current_thinking = level;
+                app.current_thinking = level;
+                persist_provider_model_selection(
+                    &mut config,
+                    &current_kind,
+                    &current_model,
+                    current_thinking,
+                    &mut app,
+                );
+                maybe_warn_thinking_unsupported(
+                    &mut app,
+                    &current_kind,
+                    &current_model,
+                    current_thinking,
+                );
             }
         }
     }
@@ -224,6 +263,7 @@ enum RunResult {
     RebuildProvider,
     ChangeModel(String),
     ChangeProvider(String),
+    ChangeThinking(ThinkingLevel),
 }
 
 struct UnavailableProvider {
@@ -332,6 +372,13 @@ async fn run(
                             match key.code {
                                 KeyCode::Up => app.selection_select_prev(),
                                 KeyCode::Down => app.selection_select_next(),
+                                KeyCode::Backspace => app.selection_backspace(),
+                                KeyCode::Char(c)
+                                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                                {
+                                    app.selection_add_char(c);
+                                }
                                 KeyCode::Enter if key.modifiers.is_empty() => {
                                     match app.apply_selection() {
                                         Some(SelectionResult::Model(m)) => {
@@ -438,6 +485,24 @@ async fn run(
                                         }
                                         Some(CommandAction::ProviderNoArg) => {
                                             app.enter_provider_selection_mode();
+                                        }
+                                        Some(CommandAction::Thinking(raw)) => {
+                                            match ThinkingLevel::parse(&raw) {
+                                                Some(level) => {
+                                                    return Ok(RunResult::ChangeThinking(level));
+                                                }
+                                                None => {
+                                                    app.messages.push(llm::Message::assistant(format!(
+                                                        "[invalid thinking level: '{raw}' (use off|minimal|low|medium|high|xhigh)]"
+                                                    )));
+                                                }
+                                            }
+                                        }
+                                        Some(CommandAction::ThinkingNoArg) => {
+                                            app.messages.push(llm::Message::assistant(format!(
+                                                "[current thinking: {}]",
+                                                app.current_thinking.as_str()
+                                            )));
                                         }
                                         Some(CommandAction::Login(provider)) => {
                                             app.start_login(&provider);
@@ -572,9 +637,11 @@ fn persist_provider_model_selection(
     config: &mut TauConfig,
     kind: &ProviderKind,
     model: &str,
+    thinking: ThinkingLevel,
     app: &mut App,
 ) {
     config.provider = Some(kind.name().to_string());
+    config.thinking = Some(thinking.as_str().to_string());
     match kind {
         ProviderKind::Copilot => config.copilot.model = Some(model.to_string()),
         ProviderKind::OpenAi => config.openai.model = Some(model.to_string()),
@@ -586,6 +653,41 @@ fn persist_provider_model_selection(
         log::debug!("failed to persist provider/model config: {}", e);
         app.messages.push(Message::assistant(format!(
             "[failed to persist config.toml: {e}]"
+        )));
+    }
+}
+
+fn resolve_thinking_level(config: &TauConfig) -> ThinkingLevel {
+    resolve_thinking_level_with_env(config, |k| std::env::var(k).ok())
+}
+
+fn resolve_thinking_level_with_env(
+    config: &TauConfig,
+    get_env: impl Fn(&str) -> Option<String>,
+) -> ThinkingLevel {
+    get_env("TAU_THINKING")
+        .as_deref()
+        .and_then(ThinkingLevel::parse)
+        .or_else(|| config.thinking.as_deref().and_then(ThinkingLevel::parse))
+        .unwrap_or(ThinkingLevel::Off)
+}
+
+fn maybe_warn_thinking_unsupported(
+    app: &mut App,
+    kind: &ProviderKind,
+    model: &str,
+    thinking: ThinkingLevel,
+) {
+    if thinking == ThinkingLevel::Off {
+        return;
+    }
+    if let ThinkingSupport::Ignored(reason) = thinking_support_for(kind, model) {
+        app.messages.push(Message::assistant(format!(
+            "[thinking '{}' is configured but currently ignored for provider={} model={}: {}]",
+            thinking.as_str(),
+            kind.name(),
+            model,
+            reason
         )));
     }
 }
@@ -602,8 +704,9 @@ async fn run_print_mode(
 ) -> io::Result<()> {
     let current_kind = resolve_provider_kind(provider_override, config);
     let current_model = resolve_model(model_override, &current_kind, config);
+    let current_thinking = resolve_thinking_level(config);
 
-    let provider = build_provider(&current_kind, &current_model, config)
+    let provider = build_provider(&current_kind, &current_model, current_thinking, config)
         .map_err(|e| io::Error::other(format!("provider error: {e}")))?;
 
     let tools = register_builtin_tools(None);
@@ -668,8 +771,8 @@ async fn run_print_mode(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_model_with_env;
-    use crate::{config::TauConfig, provider::ProviderKind};
+    use super::{resolve_model_with_env, resolve_thinking_level_with_env};
+    use crate::{config::TauConfig, provider::ProviderKind, thinking::ThinkingLevel};
     use std::collections::HashMap;
 
     #[test]
@@ -695,5 +798,27 @@ mod tests {
                 env.get(k).cloned()
             });
         assert_eq!(model, ProviderKind::Copilot.default_model());
+    }
+
+    #[test]
+    fn resolve_thinking_prefers_env() {
+        let mut env = HashMap::new();
+        env.insert("TAU_THINKING".to_string(), "high".to_string());
+        let cfg = TauConfig {
+            thinking: Some("low".to_string()),
+            ..TauConfig::default()
+        };
+        let level = resolve_thinking_level_with_env(&cfg, |k| env.get(k).cloned());
+        assert_eq!(level, ThinkingLevel::High);
+    }
+
+    #[test]
+    fn resolve_thinking_falls_back_to_config() {
+        let cfg = TauConfig {
+            thinking: Some("minimal".to_string()),
+            ..TauConfig::default()
+        };
+        let level = resolve_thinking_level_with_env(&cfg, |_| None);
+        assert_eq!(level, ThinkingLevel::Minimal);
     }
 }

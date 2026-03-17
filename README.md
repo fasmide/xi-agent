@@ -1,22 +1,39 @@
 # tau
 
-An AI agent harness for the terminal. Chat with local and remote LLMs using
-a streaming TUI, with full tool-calling support so the model can read files,
-run shell commands, edit code, and feed results back into the conversation.
+An AI agent harness for the terminal heavily inspired by pi (https://pi.dev/).
+Chat with local and remote LLMs using a streaming TUI, with full tool-calling
+support so the model can read files, run shell commands, edit code, and feed
+results back into the conversation.
 
 Built with Rust + [ratatui](https://github.com/ratatui/ratatui) +
 [tui-textarea](https://github.com/rhysd/tui-textarea).
 
 ## Status
 
-Active development. The core agentic loop is working end-to-end:
-multi-provider streaming, tool-calling, inline tool display, thinking output,
-and slash commands are all implemented. See [ROADMAP](docs/ROADMAP.md) for
-what's coming next.
+Active development, self-hosted with a few rough edges. The core agentic loop is
+working end-to-end: multi-provider streaming, tool-calling, inline tool display,
+thinking output, and slash commands are all implemented. See
+[ROADMAP](docs/ROADMAP.md) for what's coming next.
+
+- [x] Initial text-based UI with input box and streaming output
+- [x] Core agent loop (streaming, tools, thinking output)
+- [x] Multiple providers (Copilot, OpenAI, Codex, Ollama)
+- [x] Interactive authentication
+- [x] Basic tools (file read/write/edit, find files, ask user, shell commands)
+- [x] Bash on Unix, PowerShell and cmd.exe on Windows
+- [x] SKILL.md support
+- [x] AGENTS.md support
+- [x] Session persistence (resume conversations)
+- [ ] Custom tools (user-defined, pluggable)
+- [ ] Platform credential storage
+
+Currently out of scope:
+
+- [-] Safety guardrails (tool use is unrestricted)
 
 ## License
 
-MIT. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+AGPL-3.0-only. See [LICENSE](LICENSE).
 
 ## Build & Run
 

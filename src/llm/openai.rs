@@ -45,7 +45,6 @@ impl OpenAiProvider {
     /// - `TAU_PRESET` selects a named preset (openrouter, groq) which
     ///   sets the default base URL and the API-key env var.
     /// - `OPENAI_BASE_URL` overrides the preset base URL.
-    /// - `OPENAI_MODEL`    overrides the default model (gpt-4o).
     /// - Preset key env var (e.g. `OPENROUTER_API_KEY`) is tried first,
     ///   then `OPENAI_API_KEY`.
     pub fn from_env() -> anyhow::Result<Self> {
@@ -59,7 +58,6 @@ impl OpenAiProvider {
 
         let base_url =
             std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| default_base_url.to_string());
-        let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
 
         // API key: preset-specific env var → OPENAI_API_KEY
         let api_key = std::env::var(preset_key_var)
@@ -68,7 +66,7 @@ impl OpenAiProvider {
                 anyhow::anyhow!("Missing API key. Set {} or OPENAI_API_KEY.", preset_key_var)
             })?;
 
-        Ok(Self::new(base_url, model, api_key))
+        Ok(Self::new(base_url, "gpt-4o", api_key))
     }
 
     /// Clone this provider, replacing only the model name.

@@ -26,6 +26,7 @@ thinking output, and slash commands are all implemented. See
 - [x] Session persistence (resume conversations)
 - [ ] Custom tools (user-defined, pluggable)
 - [ ] Platform credential storage
+- [ ] Steering
 
 Currently out of scope:
 
@@ -44,17 +45,16 @@ cargo build --release
 
 ## Providers
 
-| Provider         | Key / credential                                      | Env var override     |
-|------------------|-------------------------------------------------------|----------------------|
-| `copilot`        | tau auth store (`auth.toml` in platform config dir) | —                    |
-| `openai`         | `OPENAI_API_KEY`                                      | `OPENAI_MODEL`       |
-| `codex`          | tau auth store (`auth.toml` in platform config dir) | `OPENAI_MODEL`       |
-| `ollama`         | none (local)                                          | `OLLAMA_BASE_URL`, `OPENAI_MODEL` |
+| Provider         | Key / credential                                      | Config fields |
+|------------------|-------------------------------------------------------|---------------|
+| `copilot`        | tau auth store (`auth.toml` in platform config dir) | `[copilot].model` |
+| `openai`         | `OPENAI_API_KEY` (or preset-specific API key)        | `[openai].model` |
+| `codex`          | tau auth store (`auth.toml` in platform config dir) | `[codex].model` |
+| `ollama`         | none (local)                                          | `[ollama].base_url`, `[ollama].model` |
 
 The default provider is `copilot`. Override at startup:
 
 ```sh
-TAU_PROVIDER=openai tau
 tau --provider openai
 tau -P ollama -m llama3.2
 ```
@@ -69,9 +69,8 @@ tau supports an optional config file at:
 Precedence (highest → lowest):
 
 1. CLI flags (`--provider`, `--model`)
-2. Environment variables
-3. `config.toml`
-4. Built-in defaults
+2. `config.toml`
+3. Built-in defaults
 
 When you change provider/model in the TUI (`/provider`, `/model`), tau writes
 that selection back to `config.toml` so it persists across restarts.
@@ -100,9 +99,6 @@ Environment variables:
 
 | Variable           | Description                        |
 |--------------------|------------------------------------|
-| `TAU_PROVIDER`    | Active provider                    |
-| `COPILOT_MODEL`    | Model override (global)            |
-| `OPENAI_MODEL`     | Model override (global)            |
 | `OPENAI_API_KEY`   | OpenAI API key                     |
 | `OLLAMA_BASE_URL`  | Ollama server base URL             |
 | `OPENAI_BASE_URL`  | OpenAI-compatible base URL override |

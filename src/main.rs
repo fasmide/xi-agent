@@ -43,12 +43,10 @@ use thinking::ThinkingLevel;
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// LLM provider to use (copilot, openai, codex, ollama).
-    /// Overrides the TAU_PROVIDER environment variable.
     #[arg(long, short = 'P', value_name = "PROVIDER")]
     provider: Option<String>,
 
     /// Model name to use (e.g. gpt-4o, llama3.1).
-    /// Overrides COPILOT_MODEL / OPENAI_MODEL environment variables.
     #[arg(long, short = 'm', value_name = "MODEL")]
     model: Option<String>,
 
@@ -86,10 +84,10 @@ async fn main() -> io::Result<()> {
         .await;
     }
 
-    // Priority: --provider flag > TAU_PROVIDER env var > config.toml > default.
+    // Priority: --provider flag > config.toml > default.
     let mut current_kind = resolve_provider_kind(cli.provider.as_deref(), &config);
 
-    // Priority: --model flag > env vars > config.toml > provider default.
+    // Priority: --model flag > config.toml > provider default.
     let mut current_model = resolve_model(cli.model.as_deref(), &current_kind, &config);
     let mut current_thinking = resolve_thinking_level(&config);
 
@@ -597,33 +595,13 @@ async fn run(
 fn resolve_provider_kind(cli_override: Option<&str>, config: &TauConfig) -> ProviderKind {
     cli_override
         .and_then(ProviderKind::from_name)
-        .or_else(|| {
-            std::env::var("TAU_PROVIDER")
-                .ok()
-                .and_then(|s| ProviderKind::from_name(&s))
-        })
         .or_else(|| config.provider.as_deref().and_then(ProviderKind::from_name))
         .unwrap_or(ProviderKind::Copilot)
 }
 
 fn resolve_model(cli_override: Option<&str>, kind: &ProviderKind, config: &TauConfig) -> String {
-    resolve_model_with_env(cli_override, kind, config, |k| std::env::var(k).ok())
-}
-
-fn resolve_model_with_env(
-    cli_override: Option<&str>,
-    kind: &ProviderKind,
-    config: &TauConfig,
-    get_env: impl Fn(&str) -> Option<String>,
-) -> String {
     cli_override
         .map(ToString::to_string)
-        .or_else(|| match kind {
-            ProviderKind::Copilot => get_env("COPILOT_MODEL"),
-            ProviderKind::OpenAi => get_env("OPENAI_MODEL"),
-            ProviderKind::Codex => get_env("CODEX_MODEL"),
-            ProviderKind::Ollama => get_env("OLLAMA_MODEL"),
-        })
         .or_else(|| match kind {
             ProviderKind::Copilot => config.copilot.model.clone(),
             ProviderKind::OpenAi => config.openai.model.clone(),
@@ -771,32 +749,52 @@ async fn run_print_mode(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_model_with_env, resolve_thinking_level_with_env};
+    use super::{resolve_model, resolve_thinking_level_with_env};
     use crate::{config::TauConfig, provider::ProviderKind, thinking::ThinkingLevel};
     use std::collections::HashMap;
 
     #[test]
-    fn resolve_model_scopes_env_to_selected_provider() {
-        let mut env = HashMap::new();
-        env.insert("OPENAI_MODEL".to_string(), "gpt-4.1".to_string());
-        env.insert("COPILOT_MODEL".to_string(), "gpt-5.3-codex".to_string());
+    fn resolve_model_prefers_cli_over_config() {
+        let cfg = TauConfig {
+            openai: crate::config::OpenAiConfig {
+                model: Some("gpt-4.1".to_string()),
+                ..Default::default()
+            },
+            ..TauConfig::default()
+        };
 
-        let model =
-            resolve_model_with_env(None, &ProviderKind::Copilot, &TauConfig::default(), |k| {
-                env.get(k).cloned()
-            });
+        let model = resolve_model(Some("gpt-4.1-mini"), &ProviderKind::OpenAi, &cfg);
+        assert_eq!(model, "gpt-4.1-mini");
+    }
+
+    #[test]
+    fn resolve_model_uses_selected_provider_config() {
+        let cfg = TauConfig {
+            openai: crate::config::OpenAiConfig {
+                model: Some("gpt-4.1".to_string()),
+                ..Default::default()
+            },
+            copilot: crate::config::CopilotConfig {
+                model: Some("gpt-5.3-codex".to_string()),
+            },
+            ..TauConfig::default()
+        };
+
+        let model = resolve_model(None, &ProviderKind::Copilot, &cfg);
         assert_eq!(model, "gpt-5.3-codex");
     }
 
     #[test]
-    fn resolve_model_ignores_openai_env_for_copilot_when_missing_copilot_env() {
-        let mut env = HashMap::new();
-        env.insert("OPENAI_MODEL".to_string(), "gpt-4.1".to_string());
+    fn resolve_model_falls_back_to_provider_default() {
+        let cfg = TauConfig {
+            openai: crate::config::OpenAiConfig {
+                model: Some("gpt-4.1".to_string()),
+                ..Default::default()
+            },
+            ..TauConfig::default()
+        };
 
-        let model =
-            resolve_model_with_env(None, &ProviderKind::Copilot, &TauConfig::default(), |k| {
-                env.get(k).cloned()
-            });
+        let model = resolve_model(None, &ProviderKind::Copilot, &cfg);
         assert_eq!(model, ProviderKind::Copilot.default_model());
     }
 

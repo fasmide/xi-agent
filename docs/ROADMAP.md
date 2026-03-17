@@ -17,8 +17,8 @@ distinct styles (yellow call block, green result block).
 
 ### Multi-provider support
 `OpenAiProvider`, `CopilotProvider`, `CodexProvider`, `OllamaProvider` all
-behind the `LlmProvider` trait. Provider selected via `TAU_PROVIDER` env
-var or `--provider` / `-P` CLI flag.
+behind the `LlmProvider` trait. Provider selected via `--provider` / `-P`
+CLI flag, config file, or built-in defaults.
 
 ### Provider and model configuration
 Active provider and model shown in the Ctrl+I info bar. `/provider` and
@@ -29,7 +29,7 @@ Active provider and model shown in the Ctrl+I info bar. `/provider` and
 Optional config file at `$XDG_CONFIG_HOME/tau/config.toml` (fallback
 `~/.config/tau/config.toml`) supports default provider and per-provider
 settings (`[openai]`, `[copilot]`, `[codex]`, `[ollama]`). Resolution order:
-CLI flags > env vars > config file > built-in defaults.
+CLI flags > config file > built-in defaults.
 
 ### Built-in tools
 `bash` (💻), `read_file` (👀), `write` (✍️), `edit` (📝), `find` (🔍),

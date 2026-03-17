@@ -17,15 +17,6 @@ impl OllamaProvider {
             client: reqwest::Client::new(),
         }
     }
-
-    /// Build from environment variables, falling back to defaults.
-    #[allow(dead_code)]
-    pub fn from_env() -> Self {
-        let host =
-            std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
-        let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.1".to_string());
-        Self::new(host, model)
-    }
 }
 
 // ── Serde types ───────────────────────────────────────────────────────────────

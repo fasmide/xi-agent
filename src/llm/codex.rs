@@ -10,6 +10,7 @@ pub struct CodexProvider {
     model: String,
     api_key: String,
     extra_headers: Vec<(String, String)>,
+    reasoning_effort: Option<String>,
     client: reqwest::Client,
 }
 
@@ -41,8 +42,14 @@ impl CodexProvider {
             model: model.into(),
             api_key: api_key.into(),
             extra_headers,
+            reasoning_effort: None,
             client: reqwest::Client::new(),
         }
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
     }
 
     fn stream_inner(&self, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> LlmStream {
@@ -50,6 +57,7 @@ impl CodexProvider {
         let model = self.model.clone();
         let api_key = self.api_key.clone();
         let extra_headers = self.extra_headers.clone();
+        let reasoning_effort = self.reasoning_effort.clone();
         let client = self.client.clone();
 
         Box::pin(async_stream::stream! {
@@ -71,6 +79,30 @@ impl CodexProvider {
                 "parallel_tool_calls": true,
             });
 
+            let explicit_reasoning = reasoning_effort
+                .as_deref()
+                .map(|effort| clamp_reasoning_effort_for_model(&model, effort));
+
+            if let Some(effort) = explicit_reasoning {
+                body["reasoning"] = serde_json::json!({
+                    "effort": effort,
+                    "summary": "auto",
+                });
+            } else if model.starts_with("gpt-5") {
+                // Align with pi-mono OpenAI-Responses behavior: when no explicit
+                // reasoning level is configured, bias GPT-5 toward low/no reasoning.
+                let low_reasoning_hint = serde_json::json!({
+                    "role": "developer",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "# Juice: 0 !important"
+                    }]
+                });
+                if let Some(arr) = body["input"].as_array_mut() {
+                    arr.push(low_reasoning_hint);
+                }
+            }
+
             if let Some(sys) = instructions {
                 body["instructions"] = serde_json::Value::String(sys);
             }
@@ -91,8 +123,16 @@ impl CodexProvider {
                 .header("accept", "text/event-stream")
                 .header("content-type", "application/json")
                 .json(&body);
+            let use_dynamic_initiator = extra_headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("X-Initiator"));
             for (k, v) in &extra_headers {
-                req = req.header(k.as_str(), v.as_str());
+                if !k.eq_ignore_ascii_case("X-Initiator") {
+                    req = req.header(k.as_str(), v.as_str());
+                }
+            }
+            if use_dynamic_initiator {
+                req = req.header("X-Initiator", infer_initiator(&messages));
             }
             let response = match req
                 .send()
@@ -265,6 +305,29 @@ impl CodexProvider {
     }
 }
 
+fn clamp_reasoning_effort_for_model(model: &str, requested: &str) -> String {
+    let effort = requested.to_ascii_lowercase();
+    let supports_minimal = model.starts_with("gpt-5.2")
+        || model.starts_with("gpt-5.3")
+        || model.starts_with("gpt-5.4");
+    let supports_xhigh = model.starts_with("gpt-5.1");
+    let max_effort = if model.contains("mini") {
+        "high"
+    } else {
+        "xhigh"
+    };
+
+    match effort.as_str() {
+        "minimal" if supports_minimal => "minimal".to_string(),
+        "minimal" => "low".to_string(),
+        "xhigh" if supports_xhigh && max_effort == "xhigh" => "xhigh".to_string(),
+        "xhigh" => "high".to_string(),
+        "high" if max_effort == "high" || max_effort == "xhigh" => "high".to_string(),
+        "medium" | "low" => effort,
+        _ => "low".to_string(),
+    }
+}
+
 // ── URL helpers ───────────────────────────────────────────────────────────────
 
 fn resolve_codex_url(base_url: &str) -> String {
@@ -358,6 +421,13 @@ fn convert_tools(tools: &[ToolDefinition]) -> Vec<serde_json::Value> {
 
 struct PendingCall {
     arguments: String,
+}
+
+fn infer_initiator(messages: &[Message]) -> &'static str {
+    match messages.last().map(|m| &m.role) {
+        Some(Role::User) | None => "user",
+        _ => "agent",
+    }
 }
 
 // ── Known models ──────────────────────────────────────────────────────────────

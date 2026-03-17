@@ -76,8 +76,16 @@ impl AnthropicProvider {
             }
             req = req.header("anthropic-version", "2023-06-01");
 
+            let use_dynamic_initiator = extra_headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("X-Initiator"));
             for (k, v) in &extra_headers {
-                req = req.header(k.as_str(), v.as_str());
+                if !k.eq_ignore_ascii_case("X-Initiator") {
+                    req = req.header(k.as_str(), v.as_str());
+                }
+            }
+            if use_dynamic_initiator {
+                req = req.header("X-Initiator", infer_initiator(&messages));
             }
 
             let response = match req
@@ -233,6 +241,13 @@ impl AnthropicProvider {
 
             yield LlmEvent::Done;
         })
+    }
+}
+
+fn infer_initiator(messages: &[Message]) -> &'static str {
+    match messages.last().map(|m| &m.role) {
+        Some(Role::User) | None => "user",
+        _ => "agent",
     }
 }
 

@@ -5,6 +5,7 @@ use anyhow::Context;
 #[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize)]
 pub struct TauConfig {
     pub provider: Option<String>,
+    pub thinking: Option<String>,
 
     #[serde(default)]
     pub openai: OpenAiConfig,
@@ -103,6 +104,7 @@ mod tests {
     fn parses_full_config_toml() {
         let raw = r#"
 provider = "openai"
+thinking = "low"
 
 [openai]
 api_key = "sk-test"
@@ -122,6 +124,7 @@ model = "llama3.1"
         let cfg = TauConfig::from_toml_str(raw).expect("config parses");
 
         assert_eq!(cfg.provider.as_deref(), Some("openai"));
+        assert_eq!(cfg.thinking.as_deref(), Some("low"));
         assert_eq!(cfg.openai.api_key.as_deref(), Some("sk-test"));
         assert_eq!(cfg.openai.model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(cfg.copilot.model.as_deref(), Some("gpt-4o"));

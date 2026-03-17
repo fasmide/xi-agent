@@ -10,6 +10,7 @@ use crate::{
         ollama::OllamaProvider,
         openai::OpenAiProvider,
     },
+    thinking::ThinkingLevel,
 };
 
 /// All supported back-end providers, in display order.
@@ -129,6 +130,12 @@ enum CopilotApiRoute {
     OpenAiResponses,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingSupport {
+    Applied,
+    Ignored(&'static str),
+}
+
 impl CopilotApiRoute {
     fn api_name(&self) -> &'static str {
         match self {
@@ -164,12 +171,34 @@ fn classify_copilot_route(model: &str) -> CopilotApiRoute {
     }
 }
 
+pub fn thinking_support_for(kind: &ProviderKind, model: &str) -> ThinkingSupport {
+    match kind {
+        ProviderKind::Copilot => match classify_copilot_route(model) {
+            CopilotApiRoute::OpenAiResponses => ThinkingSupport::Applied,
+            CopilotApiRoute::AnthropicMessages => {
+                ThinkingSupport::Ignored("copilot anthropic route has no thinking mapping yet")
+            }
+            CopilotApiRoute::OpenAiChatCompletions => ThinkingSupport::Ignored(
+                "copilot chat-completions route does not expose reasoning.effort",
+            ),
+        },
+        ProviderKind::Codex => ThinkingSupport::Applied,
+        ProviderKind::OpenAi => {
+            ThinkingSupport::Ignored("openai chat-completions provider does not map thinking yet")
+        }
+        ProviderKind::Ollama => {
+            ThinkingSupport::Ignored("ollama provider does not support mapped thinking levels")
+        }
+    }
+}
+
 /// Build a boxed `LlmProvider` for `kind` with the given model name.
 ///
 /// Returns an error if the required credentials or configuration are missing.
 pub fn build_provider(
     kind: &ProviderKind,
     model: &str,
+    thinking: ThinkingLevel,
     config: &TauConfig,
 ) -> anyhow::Result<Arc<dyn LlmProvider + Send + Sync>> {
     match kind {
@@ -198,7 +227,8 @@ pub fn build_provider(
                     &creds.access_token,
                     model,
                     creds.base_url.as_deref(),
-                );
+                )
+                .with_reasoning_effort(thinking.to_reasoning_effort().map(ToString::to_string));
                 Ok(Arc::new(p))
             } else {
                 let p = copilot::from_access_token(
@@ -241,7 +271,8 @@ pub fn build_provider(
                 .ok_or_else(|| anyhow::anyhow!("Not authenticated for codex. Run /login codex."))?;
             let base_url = std::env::var("CODEX_BASE_URL")
                 .unwrap_or_else(|_| CODEX_DEFAULT_BASE_URL.to_string());
-            let p = CodexProvider::new(base_url, model, creds.access_token, creds.account_id);
+            let p = CodexProvider::new(base_url, model, creds.access_token, creds.account_id)
+                .with_reasoning_effort(thinking.to_reasoning_effort().map(ToString::to_string));
             Ok(Arc::new(p))
         }
         ProviderKind::Ollama => {
@@ -256,7 +287,8 @@ pub fn build_provider(
 
 #[cfg(test)]
 mod tests {
-    use super::{CopilotApiRoute, classify_copilot_route};
+    use super::{CopilotApiRoute, ThinkingSupport, classify_copilot_route, thinking_support_for};
+    use crate::provider::ProviderKind;
 
     #[test]
     fn copilot_route_uses_responses_for_codex_models() {
@@ -280,5 +312,21 @@ mod tests {
             classify_copilot_route("gpt-4o"),
             CopilotApiRoute::OpenAiChatCompletions
         );
+    }
+
+    #[test]
+    fn thinking_support_applies_for_copilot_responses() {
+        assert_eq!(
+            thinking_support_for(&ProviderKind::Copilot, "gpt-5.3-codex"),
+            ThinkingSupport::Applied
+        );
+    }
+
+    #[test]
+    fn thinking_support_ignored_for_copilot_chat() {
+        assert!(matches!(
+            thinking_support_for(&ProviderKind::Copilot, "gpt-4o"),
+            ThinkingSupport::Ignored(_)
+        ));
     }
 }

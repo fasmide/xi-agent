@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role, ToolDefinition};
+use super::{
+    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role,
+    ToolDefinition,
+};
 
 pub struct OpenAiProvider {
     base_url: String,
@@ -117,6 +120,7 @@ impl OpenAiProvider {
             let mut buf = String::new();
             // Accumulate partial tool-call deltas keyed by index.
             let mut tool_calls: HashMap<u32, PartialToolCall> = HashMap::new();
+            let mut emitted_tool_intent = false;
             let mut line_num = 0usize;
 
             'outer: while let Some(chunk) = byte_stream.next().await {
@@ -183,10 +187,21 @@ impl OpenAiProvider {
                         // Text tokens.
                         if let Some(content) = delta.content
                             && !content.is_empty() {
-                                yield LlmEvent::Token(content);
+                                yield LlmEvent::Token {
+                                    text: content,
+                                    phase: if emitted_tool_intent {
+                                        AssistantPhase::Provisional
+                                    } else {
+                                        AssistantPhase::Unknown
+                                    },
+                                };
                             }
 
                         // Tool-call delta fragments — merge into accumulator.
+                        if !delta.tool_calls.is_empty() && !emitted_tool_intent {
+                            emitted_tool_intent = true;
+                            yield LlmEvent::ToolIntentStart;
+                        }
                         for tc_delta in delta.tool_calls {
                             let entry = tool_calls
                                 .entry(tc_delta.index)

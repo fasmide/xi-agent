@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     app::{App, MAX_SELECTION_VISIBLE},
     commands::CompletionItem,
-    llm::Role,
+    llm::{AssistantPhase, Role},
     provider::context_window_for_model,
     tool_presentation,
 };
@@ -619,14 +619,26 @@ fn build_log_lines(
                     }
                 }
 
+                let effective_phase = match msg.assistant_phase {
+                    Some(p) => p,
+                    None if is_streaming_last => AssistantPhase::Unknown,
+                    None => AssistantPhase::Final,
+                };
+                let answer_icon = match effective_phase {
+                    AssistantPhase::Provisional => "💭",
+                    AssistantPhase::Final => "💬",
+                    AssistantPhase::Unknown if is_streaming_last => "💭",
+                    AssistantPhase::Unknown => "💬",
+                };
+
                 // Render the answer only when there is visible answer content.
                 // Show the streaming cursor (▋) at the end of the answer area
                 // whenever this is the active streaming message.
                 if has_answer {
                     let content = if is_streaming_last && msg.content.is_empty() {
-                        "💬 ▋".to_string()
+                        format!("{answer_icon} ▋")
                     } else {
-                        format!("💬 {}", msg.content)
+                        format!("{answer_icon} {}", msg.content)
                     };
                     let suffix = if is_streaming_last && !msg.content.is_empty() {
                         "▋"
@@ -1000,7 +1012,7 @@ fn format_context_size(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::Message;
+    use crate::llm::{AssistantPhase, Message};
 
     fn line_text(line: &Line<'_>) -> String {
         line.spans
@@ -1014,6 +1026,22 @@ mod tests {
         let messages = vec![Message::assistant("hello")];
         let lines = build_log_lines(&messages, false, 80);
         assert_eq!(line_text(&lines[0]), "💬 hello");
+    }
+
+    #[test]
+    fn assistant_provisional_phase_uses_thought_bubble() {
+        let mut msg = Message::assistant("working");
+        msg.assistant_phase = Some(AssistantPhase::Provisional);
+        let lines = build_log_lines(&[msg], false, 80);
+        assert_eq!(line_text(&lines[0]), "💭 working");
+    }
+
+    #[test]
+    fn assistant_unknown_phase_streaming_uses_thought_bubble() {
+        let mut msg = Message::assistant("streaming");
+        msg.assistant_phase = Some(AssistantPhase::Unknown);
+        let lines = build_log_lines(&[msg], true, 80);
+        assert_eq!(line_text(&lines[0]), "💭 streaming▋");
     }
 
     #[test]

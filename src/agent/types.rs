@@ -2,6 +2,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
+use crate::llm::AssistantPhase;
+
 // ── Tool result ───────────────────────────────────────────────────────────────
 
 /// The output produced by a tool execution.
@@ -84,9 +86,11 @@ pub type AskRequestTx = UnboundedSender<AskRequest>;
 pub enum AgentEvent {
     // ── LLM streaming ─────────────────────────────────────────────────────────
     /// A text token chunk from the model's answer.
-    TextToken(String),
+    TextToken { text: String, phase: AssistantPhase },
     /// A token chunk from the model's thinking / chain-of-thought block.
     ThinkingToken(String),
+    /// The provider indicated that an assistant tool call is forthcoming.
+    ToolIntentStart,
     // ── Tool lifecycle ─────────────────────────────────────────────────────────
     /// The model requested a tool call; execution is about to begin.
     ToolCallStart {

@@ -1,7 +1,10 @@
 use futures_util::StreamExt;
 use std::collections::HashMap;
 
-use super::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role, ToolDefinition};
+use super::{
+    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role,
+    ToolDefinition,
+};
 
 pub struct AnthropicProvider {
     base_url: String,
@@ -115,6 +118,7 @@ impl AnthropicProvider {
             let mut buf = String::new();
             // Track streaming tool_use blocks: content index → accumulated state.
             let mut tool_blocks: HashMap<u64, ToolBlock> = HashMap::new();
+            let mut emitted_tool_intent = false;
             let mut line_num = 0usize;
 
             while let Some(chunk) = byte_stream.next().await {
@@ -165,6 +169,10 @@ impl AnthropicProvider {
                             let index = ev["index"].as_u64().unwrap_or(0);
                             let block = &ev["content_block"];
                             if block["type"].as_str() == Some("tool_use") {
+                                if !emitted_tool_intent {
+                                    emitted_tool_intent = true;
+                                    yield LlmEvent::ToolIntentStart;
+                                }
                                 tool_blocks.insert(
                                     index,
                                     ToolBlock {
@@ -184,7 +192,14 @@ impl AnthropicProvider {
                                     if let Some(text) = delta["text"].as_str()
                                         && !text.is_empty()
                                     {
-                                        yield LlmEvent::Token(text.to_string());
+                                        yield LlmEvent::Token {
+                                            text: text.to_string(),
+                                            phase: if emitted_tool_intent {
+                                                AssistantPhase::Provisional
+                                            } else {
+                                                AssistantPhase::Unknown
+                                            },
+                                        };
                                     }
                                 }
                                 Some("thinking_delta") => {

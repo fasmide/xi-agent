@@ -1,7 +1,7 @@
 # Output phase classification from provider stream
 
 **Date:** 2026-03-17  
-**Status:** Proposed plan  
+**Status:** Implemented (verified + accepted)  
 **Scope:** LLM stream events, agent loop events, UI icon mapping
 
 ## Chosen direction
@@ -52,7 +52,7 @@ Out of scope (for this feature):
 
 Extend `LlmEvent` with a tool-intent signal and phase-aware text delta shape.
 
-Proposed additions (exact naming to confirm during build):
+Proposed additions (locked for build):
 
 - `ToolIntentStart` (emitted immediately when provider indicates a pending function/tool call)
 - `Token { text, phase }` where `phase ∈ {Unknown, Provisional, Final}`
@@ -72,9 +72,10 @@ Compatibility rule:
 
 Update `run_agent_loop` to forward early intent to app state before tool execution begins.
 
-Add corresponding `AgentEvent` variant(s), e.g.:
+Add corresponding `AgentEvent` variant(s):
 
-- `AssistantPhaseChanged(Provisional|Final)` or `ToolIntentStart`
+- `TextToken { text, phase }` where phase mirrors `LlmEvent` token phase
+- `ToolIntentStart`
 
 Ensure ordering invariants:
 
@@ -87,11 +88,14 @@ Ensure ordering invariants:
 
 Track current assistant turn phase while streaming.
 
-- Default: `Unknown`
-- On tool-intent: `Provisional`
-- On turn completion with no tool calls: `Final`
+- Message field: `assistant_phase: Option<AssistantPhase>` (persisted, additive, serde-default)
+- Streaming default when no explicit phase yet: treat as `Unknown`
+- On tool-intent: mark current assistant turn `Provisional`
+- On turn completion with no tool calls: mark assistant turn `Final`
 
-Persist enough metadata on assistant messages to render the correct icon after streaming completes.
+Rationale:
+
+- Persisted optional field keeps session backward compatibility while preserving post-stream icon semantics across resume/reload.
 
 ### 5) UI icon mapping
 
@@ -171,8 +175,10 @@ Minimum acceptance checks:
    - `cargo clippy --all-targets --all-features`
    - `cargo test`
 
-## Open decisions to confirm before build
+## Locked decisions before build
 
-1. Should phase live on `Message` (persisted) or only in transient UI state?
-2. Should we introduce a distinct `InternalMonologueToken` event, or treat it as `Token + phase`?
-3. Exact fallback icon for `Unknown` during streaming (`💭` vs current `💬`).
+1. Phase lives on `Message` as an additive optional persisted field (`assistant_phase: Option<AssistantPhase>`).
+2. No distinct `InternalMonologueToken`; use `Token + phase` plus existing `ThinkingToken`.
+3. `Unknown` fallback icon:
+   - while streaming: `💭`
+   - after turn end with no tool intent/calls: `💬`.

@@ -704,13 +704,16 @@ async fn run_print_mode(
 
     while let Some(ev) = rx.recv().await {
         match ev {
-            AgentEvent::TextToken(t) => {
-                print!("{t}");
+            AgentEvent::TextToken { text, .. } => {
+                print!("{text}");
                 use std::io::Write;
                 let _ = io::stdout().flush();
             }
             AgentEvent::ThinkingToken(_) => {
                 // Suppress thinking tokens in print mode.
+            }
+            AgentEvent::ToolIntentStart => {
+                // No-op in print mode.
             }
             AgentEvent::ToolCallStart { name, args, .. } => {
                 eprintln!("{}", tool_presentation::tool_invocation_label(&name, &args));

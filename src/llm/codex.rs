@@ -1,7 +1,10 @@
 use futures_util::StreamExt;
 use std::collections::HashMap;
 
-use super::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role, ToolDefinition};
+use super::{
+    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role,
+    ToolDefinition,
+};
 
 pub const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 
@@ -159,6 +162,7 @@ impl CodexProvider {
             // Track pending function calls keyed by item index or call_id.
             let mut pending_calls: HashMap<String, PendingCall> = HashMap::new();
             let mut current_call_item_id: Option<String> = None;
+            let mut emitted_tool_intent = false;
             let mut line_num = 0usize;
 
             while let Some(chunk) = byte_stream.next().await {
@@ -205,7 +209,14 @@ impl CodexProvider {
                         "response.output_text.delta" => {
                             if let Some(delta) = ev["delta"].as_str()
                                 && !delta.is_empty() {
-                                    yield LlmEvent::Token(delta.to_string());
+                                    yield LlmEvent::Token {
+                                        text: delta.to_string(),
+                                        phase: if emitted_tool_intent {
+                                            AssistantPhase::Provisional
+                                        } else {
+                                            AssistantPhase::Unknown
+                                        },
+                                    };
                                 }
                         }
 
@@ -221,6 +232,10 @@ impl CodexProvider {
                         "response.output_item.added" => {
                             let item = &ev["item"];
                             if item["type"].as_str() == Some("function_call") {
+                                if !emitted_tool_intent {
+                                    emitted_tool_intent = true;
+                                    yield LlmEvent::ToolIntentStart;
+                                }
                                 let item_id = item["id"].as_str()
                                     .unwrap_or("")
                                     .to_string();

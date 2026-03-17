@@ -6,7 +6,9 @@ use tokio::sync::mpsc;
 
 use crate::agent::types::AgentEvent;
 use crate::agent::{AgentLoopConfig, run_agent_loop};
-use crate::llm::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ToolDefinition};
+use crate::llm::{
+    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ToolDefinition,
+};
 
 // ── MockProvider ──────────────────────────────────────────────────────────────
 
@@ -67,14 +69,17 @@ async fn run_and_collect(provider: MockProvider) -> Vec<AgentEvent> {
 #[tokio::test]
 async fn agent_loop_single_text_turn() {
     let provider = MockProvider::new(vec![vec![
-        LlmEvent::Token("hello".to_string()),
+        LlmEvent::Token {
+            text: "hello".to_string(),
+            phase: AssistantPhase::Unknown,
+        },
         LlmEvent::Done,
     ]]);
     let events = run_and_collect(provider).await;
 
     // First event must be TextToken("hello").
     assert!(
-        matches!(&events[0], AgentEvent::TextToken(t) if t == "hello"),
+        matches!(&events[0], AgentEvent::TextToken { text, .. } if text == "hello"),
         "unexpected first event: {:?}",
         events[0]
     );
@@ -100,7 +105,13 @@ async fn agent_loop_tool_call_then_text() {
             },
             LlmEvent::Done,
         ],
-        vec![LlmEvent::Token("result".to_string()), LlmEvent::Done],
+        vec![
+            LlmEvent::Token {
+                text: "result".to_string(),
+                phase: AssistantPhase::Final,
+            },
+            LlmEvent::Done,
+        ],
     ]);
     let events = run_and_collect(provider).await;
 
@@ -112,13 +123,42 @@ async fn agent_loop_tool_call_then_text() {
         .any(|e| matches!(e, AgentEvent::ToolCallEnd { .. }));
     let has_text = events
         .iter()
-        .any(|e| matches!(e, AgentEvent::TextToken(t) if t == "result"));
+        .any(|e| matches!(e, AgentEvent::TextToken { text, .. } if text == "result"));
     let ends_done = matches!(events.last().unwrap(), AgentEvent::Done);
 
     assert!(has_tool_start, "expected ToolCallStart in events");
     assert!(has_tool_end, "expected ToolCallEnd in events");
     assert!(has_text, "expected TextToken('result') in events");
     assert!(ends_done, "expected Done as last event");
+}
+
+#[tokio::test]
+async fn agent_loop_forwards_tool_intent_before_tool_start() {
+    let provider = MockProvider::new(vec![vec![
+        LlmEvent::ToolIntentStart,
+        LlmEvent::ToolCall {
+            id: "call_1".to_string(),
+            name: "bash".to_string(),
+            args: serde_json::json!({"command": "echo hi"}),
+        },
+        LlmEvent::Done,
+    ]]);
+
+    let events = run_and_collect(provider).await;
+
+    let intent_idx = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ToolIntentStart))
+        .expect("expected ToolIntentStart");
+    let tool_start_idx = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ToolCallStart { .. }))
+        .expect("expected ToolCallStart");
+
+    assert!(
+        intent_idx < tool_start_idx,
+        "expected ToolIntentStart before ToolCallStart"
+    );
 }
 
 #[tokio::test]
@@ -146,7 +186,13 @@ async fn agent_loop_before_hook_blocks_tool() {
             },
             LlmEvent::Done,
         ],
-        vec![LlmEvent::Token("ok".to_string()), LlmEvent::Done],
+        vec![
+            LlmEvent::Token {
+                text: "ok".to_string(),
+                phase: AssistantPhase::Final,
+            },
+            LlmEvent::Done,
+        ],
     ]);
 
     let (tx, mut rx) = mpsc::unbounded_channel();

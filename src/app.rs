@@ -11,7 +11,7 @@ use crate::{
     },
     auth::{self, LoginEvent},
     commands::{self, CompletionItem},
-    llm::{LlmProvider, Message, Role},
+    llm::{AssistantPhase, LlmProvider, Message, Role},
     provider::ProviderKind,
     session::SessionStore,
     skills::SkillMeta,
@@ -1079,10 +1079,19 @@ impl App {
                         .push_str(&token);
                 }
             }
-            AgentEvent::TextToken(token) => {
+            AgentEvent::TextToken { text, phase } => {
                 self.ensure_assistant_message();
                 if let Some(last) = self.messages.last_mut() {
-                    last.content.push_str(&token);
+                    last.content.push_str(&text);
+                    if phase != AssistantPhase::Unknown {
+                        last.assistant_phase = Some(phase);
+                    }
+                }
+            }
+            AgentEvent::ToolIntentStart => {
+                self.ensure_assistant_message();
+                if let Some(last) = self.messages.last_mut() {
+                    last.assistant_phase = Some(AssistantPhase::Provisional);
                 }
             }
             AgentEvent::ToolCallStart { id, name, args } => {

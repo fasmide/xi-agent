@@ -45,11 +45,11 @@ User keystroke → App::submit
   └─ spawns tokio task: run_agent_loop(messages, config, provider, tx)
        └─ for each turn:
             provider.stream_chat_with_tools(messages, tool_defs)
-              └─ yields LlmEvent::{Token, ThinkingToken, ToolCall, Done, Error}
+              └─ yields LlmEvent::{Token{..}, ThinkingToken, ToolIntentStart, ToolCall, Done, Error}
             if ToolCall → tool.execute(args) → ToolResult
             loop until no tool calls
-            sends AgentEvent::{TextToken, ThinkingToken, ToolCallStart,
-                               ToolCallEnd, TurnEnd, Done, Error} on tx
+            sends AgentEvent::{TextToken{..}, ThinkingToken, ToolIntentStart,
+                               ToolCallStart, ToolCallEnd, TurnEnd, Done, Error} on tx
   App::apply_event drains tx on each draw tick → updates messages vec
   ui::draw renders messages vec to terminal
 ```
@@ -59,10 +59,13 @@ User keystroke → App::submit
 ### `llm/mod.rs`
 
 ```rust
+pub enum AssistantPhase { Unknown, Provisional, Final }
+
 pub struct Message {
     pub role: Role,                      // System | User | Assistant | ToolCall | ToolResult
     pub content: String,
     pub thinking: Option<String>,        // chain-of-thought block
+    pub assistant_phase: Option<AssistantPhase>,
     pub tool_call_id: Option<String>,
     pub tool_name: Option<String>,
     pub tool_args: Option<serde_json::Value>,
@@ -70,8 +73,9 @@ pub struct Message {
 }
 
 pub enum LlmEvent {
-    Token(String),
+    Token { text: String, phase: AssistantPhase },
     ThinkingToken(String),
+    ToolIntentStart,
     ToolCall { id: String, name: String, args: serde_json::Value },
     Done,
     Error(String),
@@ -96,8 +100,9 @@ pub trait Tool: Send + Sync {
 }
 
 pub enum AgentEvent {
-    TextToken(String),
+    TextToken { text: String, phase: AssistantPhase },
     ThinkingToken(String),
+    ToolIntentStart,
     ToolCallStart { id, name, args },
     ToolCallEnd   { id, name, result: ToolResult },
     TurnEnd,

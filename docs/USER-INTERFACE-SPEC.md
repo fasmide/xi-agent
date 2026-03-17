@@ -9,6 +9,10 @@
 
 - Render a scrollable, paginated view of the session history, with the most recent command at the bottom.
 - Tool invocations are rendered as "<icon> <args>", where <icon> is a visual representation of the tool (e.g. a terminal icon for `bash`, a pencil for `edit`, etc.).
+- Assistant output uses phase-aware icons:
+  - `🧠` for model thinking tokens
+  - `💭` for provisional assistant output (tool intent/tool-calling turn)
+  - `💬` for final assistant output
 - User input is a text input field at the bottom of the screen, where users can type commands and submit them by pressing Enter.
 
 ## Login panel

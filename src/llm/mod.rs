@@ -1,5 +1,12 @@
 use std::{future::Future, pin::Pin};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AssistantPhase {
+    Unknown,
+    Provisional,
+    Final,
+}
+
 /// A single message in the conversation history.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Message {
@@ -8,6 +15,10 @@ pub struct Message {
     /// Chain-of-thought / "thinking" content emitted before the answer.
     /// `None` for messages that carry no thinking output.
     pub thinking: Option<String>,
+    /// Optional phase classification for assistant-visible answer text.
+    /// `None` preserves compatibility for old persisted sessions.
+    #[serde(default)]
+    pub assistant_phase: Option<AssistantPhase>,
     /// When true, this message is sent to the LLM and persisted in the session
     /// but is not rendered in the chat log UI.
     #[serde(default)]
@@ -30,6 +41,7 @@ impl Message {
             role: Role::User,
             content: content.into(),
             thinking: None,
+            assistant_phase: None,
             hidden: false,
             tool_call_id: None,
             tool_name: None,
@@ -43,6 +55,7 @@ impl Message {
             role: Role::Assistant,
             content: content.into(),
             thinking: None,
+            assistant_phase: None,
             hidden: false,
             tool_call_id: None,
             tool_name: None,
@@ -56,6 +69,7 @@ impl Message {
             role: Role::System,
             content: content.into(),
             thinking: None,
+            assistant_phase: None,
             hidden: false,
             tool_call_id: None,
             tool_name: None,
@@ -74,6 +88,7 @@ impl Message {
             role: Role::ToolCall,
             content: String::new(),
             thinking: None,
+            assistant_phase: None,
             hidden: false,
             tool_call_id: Some(id.into()),
             tool_name: Some(name.into()),
@@ -92,6 +107,7 @@ impl Message {
             role: Role::ToolResult,
             content: content.into(),
             thinking: None,
+            assistant_phase: None,
             hidden: false,
             tool_call_id: Some(call_id.into()),
             tool_name: None,
@@ -129,8 +145,10 @@ impl Role {
 pub enum LlmEvent {
     /// A token chunk from the model's thinking / chain-of-thought block.
     ThinkingToken(String),
-    /// A token chunk from the model's answer.
-    Token(String),
+    /// A token chunk from the model's answer with phase classification.
+    Token { text: String, phase: AssistantPhase },
+    /// The provider indicated that an assistant tool call is forthcoming.
+    ToolIntentStart,
     /// The model requested a tool call.
     ToolCall {
         id: String,
@@ -246,6 +264,7 @@ mod tests {
         let m = Message::assistant("reply");
         assert_eq!(m.role, Role::Assistant);
         assert_eq!(m.content, "reply");
+        assert!(m.assistant_phase.is_none());
     }
 
     #[test]

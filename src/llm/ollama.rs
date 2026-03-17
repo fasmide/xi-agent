@@ -1,7 +1,10 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use super::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role, ToolDefinition};
+use super::{
+    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role,
+    ToolDefinition,
+};
 
 pub struct OllamaProvider {
     pub base_url: String,
@@ -169,13 +172,21 @@ fn to_ollama_message(msg: &Message) -> OllamaMessage {
 //
 // Parses an Ollama NDJSON chunk and emits the corresponding LlmEvents.
 // Returns `true` when the stream is finished (done=true or error).
-fn parse_ndjson_line(line: &str, events: &mut Vec<LlmEvent>) -> bool {
+fn parse_ndjson_line(
+    line: &str,
+    events: &mut Vec<LlmEvent>,
+    emitted_tool_intent: &mut bool,
+) -> bool {
     if line.is_empty() {
         return false;
     }
     match serde_json::from_str::<ChatChunk>(line) {
         Ok(chunk) => {
             if !chunk.message.tool_calls.is_empty() {
+                if !*emitted_tool_intent {
+                    *emitted_tool_intent = true;
+                    events.push(LlmEvent::ToolIntentStart);
+                }
                 for (i, tc) in chunk.message.tool_calls.iter().enumerate() {
                     events.push(LlmEvent::ToolCall {
                         id: format!("call_{i}"),
@@ -188,7 +199,14 @@ fn parse_ndjson_line(line: &str, events: &mut Vec<LlmEvent>) -> bool {
                     events.push(LlmEvent::ThinkingToken(chunk.message.thinking.clone()));
                 }
                 if !chunk.message.content.is_empty() {
-                    events.push(LlmEvent::Token(chunk.message.content.clone()));
+                    events.push(LlmEvent::Token {
+                        text: chunk.message.content.clone(),
+                        phase: if *emitted_tool_intent {
+                            AssistantPhase::Provisional
+                        } else {
+                            AssistantPhase::Unknown
+                        },
+                    });
                 }
             }
             if chunk.done {
@@ -251,6 +269,7 @@ impl LlmProvider for OllamaProvider {
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
             let mut line_num = 0usize;
+            let mut emitted_tool_intent = false;
             while let Some(chunk) = byte_stream.next().await {
                 let bytes = match chunk {
                     Ok(b) => b,
@@ -265,7 +284,7 @@ impl LlmProvider for OllamaProvider {
                         line_num += 1;
                     }
                     let mut events = Vec::new();
-                    let done = parse_ndjson_line(&line, &mut events);
+                    let done = parse_ndjson_line(&line, &mut events, &mut emitted_tool_intent);
                     for ev in events { yield ev; }
                     if done { return; }
                 }
@@ -335,6 +354,7 @@ impl LlmProvider for OllamaProvider {
             let mut byte_stream = response.bytes_stream();
             let mut buf = String::new();
             let mut line_num = 0usize;
+            let mut emitted_tool_intent = false;
             while let Some(chunk) = byte_stream.next().await {
                 let bytes = match chunk {
                     Ok(b) => b,
@@ -349,7 +369,7 @@ impl LlmProvider for OllamaProvider {
                         line_num += 1;
                     }
                     let mut events = Vec::new();
-                    let done = parse_ndjson_line(&line, &mut events);
+                    let done = parse_ndjson_line(&line, &mut events, &mut emitted_tool_intent);
                     for ev in events { yield ev; }
                     if done { return; }
                 }

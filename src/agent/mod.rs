@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::llm::{LlmEvent, LlmProvider, Message, ToolDefinition};
+use crate::llm::{AssistantPhase, LlmEvent, LlmProvider, Message, ToolDefinition};
 
 pub mod system_prompt;
 pub mod tools;
@@ -44,21 +44,32 @@ pub async fn run_agent_loop(
         // the display and to `messages` for history.
         let mut assistant_text = String::new();
         let mut assistant_thinking: Option<String> = None;
+        let mut assistant_phase = AssistantPhase::Unknown;
         let mut pending_tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new(); // (id, name, args)
 
         let mut stream_error: Option<String> = None;
 
         while let Some(ev) = stream.next().await {
             match ev {
-                LlmEvent::Token(t) => {
-                    let _ = tx.send(AgentEvent::TextToken(t.clone()));
-                    assistant_text.push_str(&t);
+                LlmEvent::Token { text, phase } => {
+                    let _ = tx.send(AgentEvent::TextToken {
+                        text: text.clone(),
+                        phase,
+                    });
+                    assistant_text.push_str(&text);
+                    if phase != AssistantPhase::Unknown {
+                        assistant_phase = phase;
+                    }
                 }
                 LlmEvent::ThinkingToken(t) => {
                     let _ = tx.send(AgentEvent::ThinkingToken(t.clone()));
                     assistant_thinking
                         .get_or_insert_with(String::new)
                         .push_str(&t);
+                }
+                LlmEvent::ToolIntentStart => {
+                    let _ = tx.send(AgentEvent::ToolIntentStart);
+                    assistant_phase = AssistantPhase::Provisional;
                 }
                 LlmEvent::ToolCall { id, name, args } => {
                     pending_tool_calls.push((id, name, args));
@@ -79,6 +90,13 @@ pub async fn run_agent_loop(
         // Append assistant message to history (even if empty when tools were called).
         let mut asst_msg = Message::assistant(&assistant_text);
         asst_msg.thinking = assistant_thinking;
+        asst_msg.assistant_phase = Some(if pending_tool_calls.is_empty() {
+            AssistantPhase::Final
+        } else if assistant_phase == AssistantPhase::Unknown {
+            AssistantPhase::Provisional
+        } else {
+            assistant_phase
+        });
         messages.push(asst_msg);
 
         // ── No tool calls → final answer ──────────────────────────────────────

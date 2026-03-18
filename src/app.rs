@@ -972,6 +972,7 @@ impl App {
         self.current_session_id = None;
         self.queued_steering.clear();
         self.steering_tx = None;
+        self.latest_usage = None;
         self.reset_textarea();
         self.auto_scroll = true;
         self.refresh_resume_availability();

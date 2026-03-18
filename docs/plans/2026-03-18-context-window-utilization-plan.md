@@ -4,6 +4,10 @@
 **Status:** Implemented (verified + accepted)  
 **Scope:** provider stream usage capture, app state propagation, info-line rendering
 
+## Post-acceptance follow-up
+
+- Fixed stale utilization after `/new` by clearing `App::latest_usage` in `App::new_conversation()` (`src/app.rs`).
+
 ## Chosen direction
 
 Add provider-agnostic token-usage events to the streaming pipeline, store latest usage in app state, and extend the info line to display context utilization when both usage and model context-window size are known.

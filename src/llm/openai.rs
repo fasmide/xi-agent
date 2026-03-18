@@ -594,3 +594,87 @@ impl LlmProvider for OpenAiProvider {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{infer_initiator, normalize_tool_name, to_oai_messages};
+    use crate::llm::{Message, Role};
+
+    #[test]
+    fn normalize_tool_name_maps_emoji_aliases_and_passthrough() {
+        assert_eq!(normalize_tool_name("👀"), "read_file");
+        assert_eq!(normalize_tool_name("✍️"), "write_file");
+        assert_eq!(normalize_tool_name("📝"), "edit_file");
+        assert_eq!(normalize_tool_name("💻"), "bash");
+        assert_eq!(normalize_tool_name("🔍"), "find_files");
+        assert_eq!(normalize_tool_name("custom_tool"), "custom_tool");
+    }
+
+    #[test]
+    fn infer_initiator_depends_on_last_message_role() {
+        assert_eq!(infer_initiator(&[]), "user");
+        assert_eq!(infer_initiator(&[Message::user("hi")]), "user");
+        assert_eq!(infer_initiator(&[Message::assistant("ok")]), "agent");
+    }
+
+    #[test]
+    fn to_oai_messages_merges_assistant_with_tool_calls_and_results() {
+        let messages = vec![
+            Message::assistant("I will call tools"),
+            Message::tool_call("call_1", "👀", serde_json::json!({"path": "a.txt"})),
+            Message::tool_result("call_1", "contents", false),
+            Message::tool_call("call_2", "bash", serde_json::json!({"command": "echo hi"})),
+            Message::tool_result("call_2", "hi", false),
+            Message::user("thanks"),
+        ];
+
+        let out = to_oai_messages(&messages);
+        assert_eq!(out.len(), 4);
+
+        let assistant = &out[0];
+        assert_eq!(assistant.role, "assistant");
+        assert_eq!(assistant.content.as_deref(), Some("I will call tools"));
+        let calls = assistant.tool_calls.as_ref().expect("tool calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].function.name, "read_file");
+        assert_eq!(calls[1].id, "call_2");
+        assert_eq!(calls[1].function.name, "bash");
+
+        assert_eq!(out[1].role, "tool");
+        assert_eq!(out[1].tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(out[2].role, "tool");
+        assert_eq!(out[2].tool_call_id.as_deref(), Some("call_2"));
+        assert_eq!(out[3].role, "user");
+        assert_eq!(out[3].content.as_deref(), Some("thanks"));
+    }
+
+    #[test]
+    fn to_oai_messages_skips_empty_assistant_without_tool_calls() {
+        let out = to_oai_messages(&[Message::assistant("")]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn to_oai_messages_handles_standalone_tool_call_with_fallback_id() {
+        let mut tc = Message::tool_call("provided", "custom", serde_json::json!({"x": 1}));
+        tc.tool_call_id = None;
+
+        let out = to_oai_messages(&[tc]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "assistant");
+        let calls = out[0].tool_calls.as_ref().expect("tool calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_0");
+        assert_eq!(calls[0].function.name, "custom");
+    }
+
+    #[test]
+    fn to_oai_messages_keeps_non_assistant_roles_direct() {
+        let messages = vec![Message::system("rules"), Message::user("hello")];
+        let out = to_oai_messages(&messages);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].role, Role::System.as_str());
+        assert_eq!(out[1].role, Role::User.as_str());
+    }
+}

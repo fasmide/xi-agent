@@ -58,3 +58,81 @@ pub struct CodexCredentials {
     pub expires_at: i64,
     pub account_id: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AuthFile, ProviderCredentials};
+
+    #[test]
+    fn auth_file_defaults_when_fields_missing() {
+        let parsed: AuthFile = serde_json::from_str("{}").expect("parse auth file");
+        assert_eq!(parsed.version, 1);
+        assert!(parsed.providers.is_empty());
+    }
+
+    #[test]
+    fn copilot_credentials_deserialize_without_base_url() {
+        let raw = r#"
+        {
+          "version": 1,
+          "providers": {
+            "copilot": {
+              "kind": "copilot",
+              "access_token": "a",
+              "refresh_token": "r",
+              "expires_at": 123
+            }
+          }
+        }
+        "#;
+
+        let parsed: AuthFile = serde_json::from_str(raw).expect("parse with copilot credentials");
+        match parsed.providers.get("copilot").expect("copilot entry") {
+            ProviderCredentials::Copilot {
+                access_token,
+                refresh_token,
+                expires_at,
+                base_url,
+            } => {
+                assert_eq!(access_token, "a");
+                assert_eq!(refresh_token, "r");
+                assert_eq!(*expires_at, 123);
+                assert_eq!(base_url, &None);
+            }
+            _ => panic!("expected copilot credentials"),
+        }
+    }
+
+    #[test]
+    fn provider_credentials_round_trip_json() {
+        let mut auth = AuthFile::default();
+        auth.providers.insert(
+            "copilot".to_string(),
+            ProviderCredentials::Copilot {
+                access_token: "cop_tok".to_string(),
+                refresh_token: "cop_ref".to_string(),
+                expires_at: 111,
+                base_url: Some("https://api.example".to_string()),
+            },
+        );
+        auth.providers.insert(
+            "codex".to_string(),
+            ProviderCredentials::Codex {
+                access_token: "cod_tok".to_string(),
+                refresh_token: "cod_ref".to_string(),
+                expires_at: 222,
+                account_id: "acct_123".to_string(),
+            },
+        );
+
+        let json = serde_json::to_string(&auth).expect("serialize");
+        let round_trip: AuthFile = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(round_trip.version, 1);
+        assert_eq!(round_trip.providers.len(), 2);
+        assert!(matches!(
+            round_trip.providers.get("codex"),
+            Some(ProviderCredentials::Codex { account_id, .. }) if account_id == "acct_123"
+        ));
+    }
+}

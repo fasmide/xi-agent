@@ -257,3 +257,63 @@ fn extract_account_id(access_token: &str) -> Option<String> {
         .as_str()
         .map(|s| s.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    use super::{extract_account_id, generate_pkce_pair, random_urlsafe};
+
+    fn jwt_with_payload(payload_json: &str) -> String {
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(payload_json.as_bytes());
+        format!("{header}.{payload}.sig")
+    }
+
+    #[test]
+    fn extract_account_id_from_valid_token_payload() {
+        let token = jwt_with_payload(
+            r#"{"https://api.openai.com/auth":{"chatgpt_account_id":"acct_123"}}"#,
+        );
+
+        let account = extract_account_id(&token);
+        assert_eq!(account, Some("acct_123".to_string()));
+    }
+
+    #[test]
+    fn extract_account_id_returns_none_for_missing_claim_or_invalid_token() {
+        let missing_claim = jwt_with_payload(r#"{"sub":"u1"}"#);
+        assert_eq!(extract_account_id(&missing_claim), None);
+
+        assert_eq!(extract_account_id("not-a-jwt"), None);
+    }
+
+    #[test]
+    fn random_urlsafe_returns_requested_length_and_charset() {
+        let value = random_urlsafe(24);
+        assert_eq!(value.len(), 32);
+        assert!(
+            value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        );
+    }
+
+    #[test]
+    fn generate_pkce_pair_produces_urlsafe_values() {
+        let (verifier, challenge) = generate_pkce_pair();
+        assert!(!verifier.is_empty());
+        assert!(!challenge.is_empty());
+        assert_ne!(verifier, challenge);
+        assert!(
+            verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        );
+        assert!(
+            challenge
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        );
+    }
+}

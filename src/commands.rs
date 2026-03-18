@@ -334,3 +334,119 @@ pub fn parse(input: &str) -> Option<CommandAction> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{CommandAction, completions_for, parse};
+    use crate::skills::SkillMeta;
+
+    fn skill(name: &str, description: &str) -> SkillMeta {
+        SkillMeta {
+            name: name.to_string(),
+            description: description.to_string(),
+            path: PathBuf::from(format!("/tmp/{name}/SKILL.md")),
+            base_dir: PathBuf::from(format!("/tmp/{name}")),
+        }
+    }
+
+    #[test]
+    fn parse_recognizes_builtins_and_args() {
+        assert!(matches!(parse("/new"), Some(CommandAction::New)));
+        assert!(matches!(parse("/quit"), Some(CommandAction::Quit)));
+        assert!(matches!(parse("/model"), Some(CommandAction::ModelNoArg)));
+        assert!(matches!(
+            parse("/model gpt-4o"),
+            Some(CommandAction::Model(m)) if m == "gpt-4o"
+        ));
+        assert!(matches!(
+            parse("/provider openai"),
+            Some(CommandAction::Provider(p)) if p == "openai"
+        ));
+        assert!(matches!(
+            parse("/thinking high"),
+            Some(CommandAction::Thinking(l)) if l == "high"
+        ));
+        assert!(matches!(
+            parse("/login codex"),
+            Some(CommandAction::Login(p)) if p == "codex"
+        ));
+        assert!(matches!(
+            parse("/resume abc123"),
+            Some(CommandAction::Resume(id)) if id == "abc123"
+        ));
+        assert!(matches!(parse("/resume"), Some(CommandAction::ResumeNoArg)));
+    }
+
+    #[test]
+    fn parse_skill_command_handles_name_and_optional_args() {
+        assert!(parse("/skill:").is_none());
+        assert!(matches!(
+            parse("/skill:plan"),
+            Some(CommandAction::Skill { name, args }) if name == "plan" && args.is_empty()
+        ));
+        assert!(matches!(
+            parse("/skill:build step-by-step"),
+            Some(CommandAction::Skill { name, args }) if name == "build" && args == "step-by-step"
+        ));
+    }
+
+    #[test]
+    fn completions_non_slash_input_returns_empty() {
+        let items = completions_for("hello", None, false, None, &[]);
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn model_completions_show_loading_or_error_or_matching_models() {
+        let loading = completions_for("/model ", None, true, None, &[]);
+        assert_eq!(loading.len(), 1);
+        assert!(loading[0].loading);
+        assert!(loading[0].label.contains("fetching"));
+
+        let errored = completions_for("/model ", None, false, Some("no auth"), &[]);
+        assert_eq!(errored.len(), 1);
+        assert!(errored[0].error);
+        assert!(errored[0].label.contains("no auth"));
+
+        let models = vec!["gpt-4o".to_string(), "gpt-5".to_string(), "claude".to_string()];
+        let items = completions_for("/model gpt", Some(&models), false, None, &[]);
+        let complete_to: Vec<String> = items.into_iter().map(|i| i.complete_to).collect();
+        assert_eq!(complete_to, vec!["/model gpt-4o", "/model gpt-5"]);
+    }
+
+    #[test]
+    fn provider_and_thinking_completions_are_filtered() {
+        let provider_items = completions_for("/provider co", None, false, None, &[]);
+        assert!(provider_items
+            .iter()
+            .any(|i| i.complete_to == "/provider copilot"));
+        assert!(provider_items
+            .iter()
+            .all(|i| i.complete_to.contains("/provider")));
+
+        let thinking_items = completions_for("/thinking m", None, false, None, &[]);
+        let complete_to: Vec<String> = thinking_items.into_iter().map(|i| i.complete_to).collect();
+        assert!(complete_to.contains(&"/thinking minimal".to_string()));
+        assert!(complete_to.contains(&"/thinking medium".to_string()));
+        assert!(!complete_to.contains(&"/thinking high".to_string()));
+    }
+
+    #[test]
+    fn command_name_completion_includes_matching_commands_and_skills() {
+        let skills = vec![skill("plan", "Planning"), skill("build", "Build things")];
+
+        let items = completions_for("/s", None, false, None, &skills);
+        let complete_to: Vec<String> = items.into_iter().map(|i| i.complete_to).collect();
+        assert!(complete_to.iter().any(|c| c == "/skill:plan "));
+        assert!(complete_to.iter().any(|c| c == "/skill:build "));
+
+        let skill_only = completions_for("/skill:pl", None, false, None, &skills);
+        assert_eq!(skill_only.len(), 1);
+        assert_eq!(skill_only[0].complete_to, "/skill:plan ");
+
+        let no_arg_completion = completions_for("/skill:plan anything", None, false, None, &skills);
+        assert!(no_arg_completion.is_empty());
+    }
+}

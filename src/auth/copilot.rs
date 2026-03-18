@@ -190,3 +190,30 @@ fn extract_base_url(token: &str) -> Option<String> {
         .unwrap_or_else(|| domain.to_string());
     Some(format!("https://{api_domain}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::extract_base_url;
+
+    #[test]
+    fn extract_base_url_maps_proxy_prefix_to_api_subdomain() {
+        let token = "abc;proxy-ep=proxy.business.githubcopilot.com;xyz";
+        let base = extract_base_url(token);
+        assert_eq!(
+            base,
+            Some("https://api.business.githubcopilot.com".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_base_url_uses_domain_as_is_when_not_proxy_prefixed() {
+        let token = "k=v;proxy-ep=enterprise.githubcopilot.com";
+        let base = extract_base_url(token);
+        assert_eq!(base, Some("https://enterprise.githubcopilot.com".to_string()));
+    }
+
+    #[test]
+    fn extract_base_url_returns_none_when_segment_missing() {
+        assert_eq!(extract_base_url("foo=bar;baz=qux"), None);
+    }
+}

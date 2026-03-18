@@ -174,3 +174,113 @@ fn first_sentence(s: &str) -> &str {
         .unwrap_or(s.len());
     s[..end].trim()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
+
+    use super::{build_system_prompt, first_sentence};
+    use crate::{
+        agent::types::{Tool, ToolRegistry},
+        skills::SkillMeta,
+    };
+
+    struct TestTool {
+        name: &'static str,
+        desc: &'static str,
+    }
+
+    impl Tool for TestTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn description(&self) -> &str {
+            self.desc
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        fn execute(
+            &self,
+            _args: serde_json::Value,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = crate::agent::types::ToolResult> + Send + '_>,
+        > {
+            Box::pin(async { crate::agent::types::ToolResult::ok("ok") })
+        }
+    }
+
+    fn registry(tool_defs: &[(&'static str, &'static str)]) -> ToolRegistry {
+        let mut tools: ToolRegistry = HashMap::new();
+        for (name, desc) in tool_defs {
+            tools.insert(
+                (*name).to_string(),
+                Arc::new(TestTool { name, desc }) as Arc<dyn Tool>,
+            );
+        }
+        tools
+    }
+
+    #[test]
+    fn first_sentence_handles_punctuation_and_trim() {
+        assert_eq!(first_sentence("  Hello world. More text"), "Hello world.");
+        assert_eq!(first_sentence("What now? Later"), "What now?");
+        assert_eq!(first_sentence("No punctuation"), "No punctuation");
+    }
+
+    #[test]
+    fn build_system_prompt_includes_tool_specific_guidelines() {
+        let tools = registry(&[
+            ("bash", "Run shell commands. With side effects."),
+            ("find_files", "Find files recursively."),
+            ("read_file", "Read files."),
+            ("edit_file", "Edit files."),
+            ("write_file", "Write files."),
+            ("ask_user", "Ask a question."),
+        ]);
+
+        let prompt = build_system_prompt(&tools, "/tmp", &[]);
+
+        assert!(prompt.contains("Prefer find_files over bash for filesystem exploration."));
+        assert!(prompt.contains("Use read_file to examine files before editing."));
+        assert!(prompt.contains("Use edit_file for precise changes"));
+        assert!(prompt.contains("Use write_file only for new files or complete rewrites."));
+        assert!(prompt.contains("Use ask_user only when the task requires a user decision"));
+        assert!(prompt.contains("- ask_user: Ask a question."));
+        assert!(prompt.contains("- bash: Run shell commands."));
+    }
+
+    #[test]
+    fn build_system_prompt_switches_bash_guideline_when_find_is_missing() {
+        let tools = registry(&[("bash", "Run shell commands.")]);
+        let prompt = build_system_prompt(&tools, "/tmp", &[]);
+
+        assert!(prompt.contains("Use bash for file operations like ls, find, grep."));
+        assert!(!prompt.contains("Prefer find_files over bash for filesystem exploration."));
+    }
+
+    #[test]
+    fn build_system_prompt_renders_skills_block() {
+        let tools = registry(&[]);
+        let skills = vec![SkillMeta {
+            name: "plan".to_string(),
+            description: "Create an implementation plan".to_string(),
+            path: Path::new("/tmp/skills/plan/SKILL.md").to_path_buf(),
+            base_dir: PathBuf::from("/tmp/skills/plan"),
+        }];
+
+        let prompt = build_system_prompt(&tools, "/tmp", &skills);
+
+        assert!(prompt.contains("<available_skills>"));
+        assert!(prompt.contains("<name>plan</name>"));
+        assert!(prompt.contains("<description>Create an implementation plan</description>"));
+        assert!(prompt.contains("<location>/tmp/skills/plan/SKILL.md</location>"));
+    }
+}

@@ -735,10 +735,10 @@ impl App {
 
     pub fn receive_ask_request(&mut self, req: AskRequest) {
         let AskRequest {
-            question,
-            context,
+            question: _question,
+            context: _context,
             options,
-            allow_multiple,
+            allow_multiple: _allow_multiple,
             allow_freeform,
             reply,
         } = req;
@@ -749,29 +749,10 @@ impl App {
         });
         self.ask_reply = Some(reply);
 
-        let mut msg = format!("[ask_user] {question}");
-        if let Some(ctx) = &context {
-            msg.push_str("\n\nContext:\n");
-            msg.push_str(ctx);
-        }
-        if !options.is_empty() {
-            msg.push_str("\n\nOptions:");
-            for opt in &options {
-                msg.push_str("\n- ");
-                msg.push_str(&opt.title);
-                if let Some(desc) = &opt.description {
-                    msg.push_str(" — ");
-                    msg.push_str(desc);
-                }
-            }
-        }
-        if allow_multiple {
-            msg.push_str(
-                "\n\n[note: multi-select requested; current UI uses single-select fallback]",
-            );
-        }
-        self.messages.push(Message::assistant(msg));
-        self.persist_messages();
+        // Don't push an [ask_user] assistant message to app.messages — the
+        // agent's ToolCall message already represents this in the conversation
+        // history and UI. Adding an extra assistant message here would corrupt
+        // the tool_use / tool_result pairing expected by the Anthropic API.
 
         if options.is_empty() {
             self.exit_selection_mode();
@@ -828,7 +809,8 @@ impl App {
             return;
         }
 
-        self.messages.push(Message::user(text.clone()));
+        // Don't push the answer as a plain user message — the agent's
+        // ToolResult message will represent it in history and UI.
         self.finish_pending_ask(AskUserResponse::Answer(text));
     }
 
@@ -836,8 +818,8 @@ impl App {
         if self.pending_ask.is_none() {
             return;
         }
-        self.messages.push(Message::user(answer.clone()));
-        self.persist_messages();
+        // Don't push the answer as a plain user message — the agent's
+        // ToolResult message will represent it in history and UI.
         self.finish_pending_ask(AskUserResponse::Answer(answer));
     }
 

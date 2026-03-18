@@ -5,7 +5,7 @@ use std::{
 };
 
 use chrono::{Local, Utc};
-use directories::ProjectDirs;
+use crate::dirs::PROJECT_DIRS;
 use log::{LevelFilter, Log, Metadata, Record};
 
 static LOG_ENABLED: OnceLock<bool> = OnceLock::new();
@@ -59,7 +59,7 @@ pub fn init_logging() {
         return;
     }
 
-    let Some(dirs) = ProjectDirs::from("", "tau", "tau") else {
+    let Some(dirs) = PROJECT_DIRS.as_ref() else {
         return;
     };
     let timestamp = Local::now().format("%Y%m%d-%H%M%S");

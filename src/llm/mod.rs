@@ -174,9 +174,10 @@ pub struct ToolDefinition {
 /// suitable for passing across thread boundaries and storing in `App`.
 pub type LlmStream = Pin<Box<dyn futures_util::Stream<Item = LlmEvent> + Send + 'static>>;
 
-/// A boxed future that resolves to a list of model names.
+/// A boxed future that resolves to a list of model names, or an error string.
 /// Returned by `LlmProvider::list_models`.
-pub type ModelListFuture = Pin<Box<dyn Future<Output = Vec<String>> + Send + 'static>>;
+pub type ModelListFuture =
+    Pin<Box<dyn Future<Output = Result<Vec<String>, String>> + Send + 'static>>;
 
 /// Trait every LLM backend must implement.
 ///
@@ -205,7 +206,7 @@ pub trait LlmProvider: Send + Sync {
     /// The default implementation returns an empty list; providers that
     /// support model discovery (e.g. Ollama) should override this.
     fn list_models(&self) -> ModelListFuture {
-        Box::pin(async { vec![] })
+        Box::pin(async { Ok(vec![]) })
     }
 }
 

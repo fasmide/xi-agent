@@ -1,4 +1,4 @@
-use std::{env, ffi::OsStr, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 use anyhow::Context;
 
@@ -77,30 +77,12 @@ impl TauConfig {
 }
 
 pub fn config_path() -> anyhow::Result<PathBuf> {
-    config_path_from(
-        env::var_os("XDG_CONFIG_HOME").as_deref(),
-        env::var_os("HOME").as_deref(),
-    )
-}
-
-fn config_path_from(xdg_home: Option<&OsStr>, home: Option<&OsStr>) -> anyhow::Result<PathBuf> {
-    if let Some(xdg_home) = xdg_home
-        && !xdg_home.is_empty()
-    {
-        return Ok(PathBuf::from(xdg_home).join("tau").join("config.toml"));
-    }
-
-    let home = home.context("Could not resolve HOME for config path")?;
-    Ok(PathBuf::from(home)
-        .join(".config")
-        .join("tau")
-        .join("config.toml"))
+    Ok(crate::dirs::project_dirs()?.config_dir().join("config.toml"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TauConfig, config_path_from};
-    use std::ffi::OsStr;
+    use super::TauConfig;
 
     #[test]
     fn parses_full_config_toml() {
@@ -148,19 +130,4 @@ model = "llama3.1"
         assert_eq!(cfg.ollama.model.as_deref(), Some("llama3.1"));
     }
 
-    #[test]
-    fn config_path_prefers_xdg() {
-        let path = config_path_from(Some(OsStr::new("/tmp/xdg")), Some(OsStr::new("/tmp/home")))
-            .expect("path resolves");
-        assert_eq!(path, std::path::Path::new("/tmp/xdg/tau/config.toml"));
-    }
-
-    #[test]
-    fn config_path_falls_back_to_home() {
-        let path = config_path_from(None, Some(OsStr::new("/home/alice"))).expect("path resolves");
-        assert_eq!(
-            path,
-            std::path::Path::new("/home/alice/.config/tau/config.toml")
-        );
-    }
 }

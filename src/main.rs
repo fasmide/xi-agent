@@ -20,6 +20,7 @@ mod auth;
 mod commands;
 mod config;
 mod debug_log;
+mod dirs;
 mod llm;
 mod provider;
 mod session;
@@ -54,6 +55,10 @@ struct Cli {
     /// stdout, and exit.  Accepts multiple words without shell quoting.
     #[arg(long, short = 'p', value_name = "PROMPT", num_args = 1..)]
     print: Option<Vec<String>>,
+
+    /// Print the file-system paths tau uses and exit.
+    #[arg(long)]
+    print_dirs: bool,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -63,6 +68,11 @@ async fn main() -> io::Result<()> {
     debug_log::init_logging();
 
     let cli = Cli::parse();
+
+    if cli.print_dirs {
+        dirs::print_dirs();
+        return Ok(());
+    }
 
     let mut config = match TauConfig::load() {
         Ok(c) => c,
@@ -284,7 +294,7 @@ impl LlmProvider for UnavailableProvider {
     }
 
     fn list_models(&self) -> ModelListFuture {
-        Box::pin(async { vec![] })
+        Box::pin(async { Ok(vec![]) })
     }
 }
 

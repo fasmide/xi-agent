@@ -71,6 +71,8 @@ pub struct CompletionItem {
     pub complete_to: String,
     /// When true the item is a non-interactive status row (e.g. "fetching…").
     pub loading: bool,
+    /// When true the item represents a fetch error and should be rendered in red.
+    pub error: bool,
 }
 
 impl CompletionItem {
@@ -84,6 +86,7 @@ impl CompletionItem {
                 format!("/{}", cmd.name)
             },
             loading: false,
+            error: false,
         }
     }
 
@@ -93,6 +96,7 @@ impl CompletionItem {
             detail: String::new(),
             complete_to: format!("/model {}", name),
             loading: false,
+            error: false,
         }
     }
 
@@ -102,6 +106,7 @@ impl CompletionItem {
             detail: String::new(),
             complete_to: format!("/provider {}", name),
             loading: false,
+            error: false,
         }
     }
 
@@ -112,6 +117,7 @@ impl CompletionItem {
             // Trailing space lets the user optionally append args.
             complete_to: format!("/skill:{} ", skill.name),
             loading: false,
+            error: false,
         }
     }
 
@@ -121,6 +127,17 @@ impl CompletionItem {
             detail: String::new(),
             complete_to: String::new(),
             loading: true,
+            error: false,
+        }
+    }
+
+    pub(crate) fn error_indicator(msg: &str) -> Self {
+        Self {
+            label: format!("error: {msg}"),
+            detail: String::new(),
+            complete_to: String::new(),
+            loading: true,
+            error: true,
         }
     }
 }
@@ -138,6 +155,7 @@ pub fn completions_for(
     input: &str,
     available_models: Option<&[String]>,
     models_loading: bool,
+    model_fetch_error: Option<&str>,
     skills: &[SkillMeta],
 ) -> Vec<CompletionItem> {
     use crate::provider::ProviderKind;
@@ -161,6 +179,8 @@ pub fn completions_for(
                 "model" => {
                     if models_loading {
                         vec![CompletionItem::loading_indicator()]
+                    } else if let Some(msg) = model_fetch_error {
+                        vec![CompletionItem::error_indicator(msg)]
                     } else if let Some(models) = available_models {
                         models
                             .iter()
@@ -186,6 +206,7 @@ pub fn completions_for(
                         detail: String::new(),
                         complete_to: format!("/login {p}"),
                         loading: false,
+                        error: false,
                     })
                     .collect(),
                 "thinking" => ThinkingLevel::all()
@@ -197,6 +218,7 @@ pub fn completions_for(
                         detail: String::new(),
                         complete_to: format!("/thinking {lvl}"),
                         loading: false,
+                        error: false,
                     })
                     .collect(),
                 _ => vec![],

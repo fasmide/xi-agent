@@ -2,8 +2,8 @@ use std::{fs, io::BufRead, path::PathBuf};
 
 use anyhow::Context;
 use chrono::Utc;
-use directories::ProjectDirs;
 
+use crate::dirs::project_dirs;
 use crate::llm::Message;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -28,7 +28,7 @@ pub struct SessionStore {
 
 impl SessionStore {
     pub fn open() -> anyhow::Result<Self> {
-        let dirs = ProjectDirs::from("", "tau", "tau")
+        let dirs = project_dirs()
             .context("Could not resolve platform data directory for tau")?;
         let sessions_dir = dirs.data_dir().join("sessions");
         fs::create_dir_all(&sessions_dir).with_context(|| {

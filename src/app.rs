@@ -79,10 +79,12 @@ pub struct App {
     pub completion_selected: usize,
 
     // ── Available models (for /model completions) ─────────────────────────────
-    /// Cached model list from the provider; `None` until first fetch.
+    /// Cached model list from the provider; `None` until first successful fetch.
     pub available_models: Option<Vec<String>>,
     /// True while a `list_models` task is in flight.
     pub models_loading: bool,
+    /// Set to the error message when the last model fetch failed.
+    pub model_fetch_error: Option<String>,
 
     // ── Generic selection menu ────────────────────────────────────────────────
     /// True when the full-screen selection picker is active.
@@ -144,8 +146,9 @@ pub struct App {
     /// JoinHandle for the currently running agent loop task (if any).
     agent_task: Option<JoinHandle<()>>,
     /// Receives model lists forwarded from `list_models` tasks.
-    pub(crate) models_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<String>>,
-    models_tx: tokio::sync::mpsc::UnboundedSender<Vec<String>>,
+    pub(crate) models_rx:
+        tokio::sync::mpsc::UnboundedReceiver<Result<Vec<String>, String>>,
+    models_tx: tokio::sync::mpsc::UnboundedSender<Result<Vec<String>, String>>,
     /// Receives login status events from background auth tasks.
     pub(crate) login_rx: tokio::sync::mpsc::UnboundedReceiver<LoginEvent>,
     login_tx: tokio::sync::mpsc::UnboundedSender<LoginEvent>,
@@ -185,6 +188,7 @@ impl App {
             completion_selected: 0,
             available_models: None,
             models_loading: false,
+            model_fetch_error: None,
             selection_mode: false,
             selection_title: "Select model",
             selection_items: Vec::new(),
@@ -304,6 +308,7 @@ impl App {
                 detail: String::new(),
                 complete_to: String::new(),
                 loading: true,
+                error: false,
             }]);
             return;
         };
@@ -323,6 +328,7 @@ impl App {
                 detail: String::new(),
                 complete_to: String::new(),
                 loading: true,
+                error: false,
             }]);
             return;
         }
@@ -342,6 +348,7 @@ impl App {
                     detail: format!("{} msgs • {}", meta.message_count, meta.cwd),
                     complete_to: format!("/resume_session {}", meta.id),
                     loading: false,
+                    error: false,
                 }
             })
             .collect();
@@ -379,7 +386,8 @@ impl App {
         };
         let available = self.available_models.as_deref();
         let loading = self.models_loading;
-        let new = commands::completions_for(&input, available, loading, &self.loaded_skills);
+        let fetch_error = self.model_fetch_error.as_deref();
+        let new = commands::completions_for(&input, available, loading, fetch_error, &self.loaded_skills);
 
         if new.len() != self.completions.len() {
             self.completion_selected = 0;
@@ -389,7 +397,10 @@ impl App {
 
     /// Returns true if a model-list fetch should be triggered now.
     pub fn should_fetch_models(&self) -> bool {
-        if self.available_models.is_some() || self.models_loading {
+        if self.available_models.is_some()
+            || self.models_loading
+            || self.model_fetch_error.is_some()
+        {
             return false;
         }
         let lines = self.textarea.lines();
@@ -399,32 +410,46 @@ impl App {
     /// Spawn a background task to fetch the model list from the provider.
     pub fn start_model_fetch(&mut self, provider: &DynProvider) {
         self.models_loading = true;
+        self.model_fetch_error = None;
         let future = provider.list_models();
         let tx = self.models_tx.clone();
         tokio::spawn(async move {
-            let models = future.await;
-            let _ = tx.send(models);
+            let result = future.await;
+            let _ = tx.send(result);
         });
     }
 
-    /// Store a freshly fetched model list and refresh completions.
-    pub fn apply_model_list(&mut self, models: Vec<String>) {
-        self.available_models = Some(models);
+    /// Store a freshly fetched model list (or error) and refresh completions.
+    pub fn apply_model_list(&mut self, result: Result<Vec<String>, String>) {
         self.models_loading = false;
+        match result {
+            Ok(models) => {
+                self.available_models = Some(models);
+                self.model_fetch_error = None;
+            }
+            Err(e) => {
+                self.model_fetch_error = Some(e);
+            }
+        }
         self.update_completions();
 
         if self.selection_mode && self.selection_kind == Some(SelectionKind::Model) {
-            let items: Vec<_> = self
-                .available_models
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .map(|m| commands::CompletionItem::from_model(m))
-                .collect();
-            if !items.is_empty() {
+            if let Some(err) = &self.model_fetch_error {
+                let items = vec![commands::CompletionItem::error_indicator(err)];
                 self.set_selection_items(items);
-                if self.selection_query.trim().is_empty() {
-                    self.select_current_default();
+            } else {
+                let items: Vec<_> = self
+                    .available_models
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|m| commands::CompletionItem::from_model(m))
+                    .collect();
+                if !items.is_empty() {
+                    self.set_selection_items(items);
+                    if self.selection_query.trim().is_empty() {
+                        self.select_current_default();
+                    }
                 }
             }
         }
@@ -539,7 +564,9 @@ impl App {
         self.selection_kind = Some(SelectionKind::Model);
         self.selection_title = "  Select model  ";
         self.selection_query.clear();
-        let items = if let Some(models) = &self.available_models {
+        let items = if let Some(err) = &self.model_fetch_error {
+            vec![CompletionItem::error_indicator(err)]
+        } else if let Some(models) = &self.available_models {
             models
                 .iter()
                 .map(|m| CompletionItem::from_model(m))
@@ -579,6 +606,7 @@ impl App {
                 detail: String::new(),
                 complete_to: format!("/login {p}"),
                 loading: false,
+                error: false,
             })
             .collect();
         self.set_selection_items(items);
@@ -743,6 +771,7 @@ impl App {
                 detail: opt.description.clone().unwrap_or_default(),
                 complete_to: format!("/ask_user_option {}", opt.title),
                 loading: false,
+                error: false,
             })
             .collect();
 
@@ -752,6 +781,7 @@ impl App {
                 detail: String::new(),
                 complete_to: "/ask_user_freeform".to_string(),
                 loading: false,
+                error: false,
             });
         }
 

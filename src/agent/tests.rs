@@ -41,7 +41,7 @@ impl LlmProvider for MockProvider {
     }
 
     fn list_models(&self) -> ModelListFuture {
-        Box::pin(async { vec![] })
+        Box::pin(async { Ok(vec![]) })
     }
 }
 

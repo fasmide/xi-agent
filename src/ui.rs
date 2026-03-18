@@ -482,15 +482,20 @@ fn build_completion_lines(
             };
 
             if item.loading {
-                // Non-interactive loading indicator — dim, full-width fill.
+                // Non-interactive status row — dim italic for loading, red for errors.
                 let fill =
                     " ".repeat(terminal_width.saturating_sub(INDENT.len() + item.label.len()));
+                let fg = if item.error {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                };
                 return Line::from(vec![
                     Span::styled(INDENT, Style::default().bg(bg)),
                     Span::styled(
                         item.label.clone(),
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(fg)
                             .bg(bg)
                             .add_modifier(ratatui::style::Modifier::ITALIC),
                     ),
@@ -557,12 +562,17 @@ fn build_selection_lines(
             if item.loading {
                 let fill =
                     " ".repeat(terminal_width.saturating_sub(INDENT.len() + item.label.width()));
+                let fg = if item.error {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                };
                 return Line::from(vec![
                     Span::styled(INDENT, Style::default().bg(bg)),
                     Span::styled(
                         item.label.clone(),
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(fg)
                             .bg(bg)
                             .add_modifier(ratatui::style::Modifier::ITALIC),
                     ),

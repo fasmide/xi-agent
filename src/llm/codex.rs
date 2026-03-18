@@ -484,6 +484,6 @@ impl LlmProvider for CodexProvider {
 
     fn list_models(&self) -> ModelListFuture {
         let models = known_models();
-        Box::pin(async move { models })
+        Box::pin(async move { Ok(models) })
     }
 }

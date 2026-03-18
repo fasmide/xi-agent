@@ -541,20 +541,30 @@ impl LlmProvider for OpenAiProvider {
                 Ok(r) => r,
                 Err(e) => {
                     log::warn!("openai list_models error: {e}");
-                    return vec![];
+                    return Err(format!("request failed: {e}"));
                 }
             };
-            log::debug!("← HTTP {} from openai list_models", response.status());
+            let status = response.status();
+            log::debug!("← HTTP {status} from openai list_models");
+            if !status.is_success() {
+                let msg = if status.as_u16() == 401 {
+                    "401 Unauthorized — run /login to authenticate".to_string()
+                } else {
+                    format!("HTTP {status}")
+                };
+                log::warn!("openai list_models failed: {msg}");
+                return Err(msg);
+            }
             let models: ModelsResponse = match response.json().await {
                 Ok(m) => m,
                 Err(e) => {
                     log::warn!("openai list_models parse error: {e}");
-                    return vec![];
+                    return Err(format!("failed to parse response: {e}"));
                 }
             };
             let mut ids: Vec<String> = models.data.into_iter().map(|m| m.id).collect();
             ids.sort();
-            ids
+            Ok(ids)
         })
     }
 }

@@ -386,18 +386,24 @@ impl LlmProvider for OllamaProvider {
                 Ok(r) => r,
                 Err(e) => {
                     log::warn!("ollama list_models error: {e}");
-                    return vec![];
+                    return Err(format!("request failed: {e}"));
                 }
             };
-            log::debug!("← HTTP {} from ollama list_models", response.status());
+            let status = response.status();
+            log::debug!("← HTTP {status} from ollama list_models");
+            if !status.is_success() {
+                let msg = format!("HTTP {status}");
+                log::warn!("ollama list_models failed: {msg}");
+                return Err(msg);
+            }
             let tags: TagsResponse = match response.json().await {
                 Ok(t) => t,
                 Err(e) => {
                     log::warn!("ollama list_models parse error: {e}");
-                    return vec![];
+                    return Err(format!("failed to parse response: {e}"));
                 }
             };
-            tags.models.into_iter().map(|m| m.name).collect()
+            Ok(tags.models.into_iter().map(|m| m.name).collect())
         })
     }
 }

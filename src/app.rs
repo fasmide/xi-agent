@@ -118,6 +118,9 @@ pub struct App {
     pub login_needs_rebuild: bool,
     pub refresh_in_progress: bool,
     pub retry_after_refresh: bool,
+    /// Set when a `list_models` call fails with a 401 so the fetch is
+    /// re-issued automatically once the token refresh completes.
+    pub retry_model_fetch_after_refresh: bool,
     auth_retry_budget: u8,
     login_cancel: Option<Arc<AtomicBool>>,
     /// Set by `ui::draw()` each frame: terminal (row, col) of the "open in
@@ -206,6 +209,7 @@ impl App {
             login_needs_rebuild: false,
             refresh_in_progress: false,
             retry_after_refresh: false,
+            retry_model_fetch_after_refresh: false,
             auth_retry_budget: 0,
             login_cancel: None,
             login_url_link_pos: None,
@@ -428,7 +432,24 @@ impl App {
                 self.model_fetch_error = None;
             }
             Err(e) => {
-                self.model_fetch_error = Some(e);
+                let is_auth_401 = e.contains(" 401")
+                    && (self.current_provider == "copilot" || self.current_provider == "codex");
+
+                if is_auth_401 && !self.refresh_in_progress {
+                    log::debug!(
+                        "list_models returned 401, attempting token refresh: provider={}",
+                        self.current_provider
+                    );
+                    self.refresh_in_progress = true;
+                    self.retry_model_fetch_after_refresh = true;
+                    let provider = self.current_provider.clone();
+                    let tx = self.login_tx.clone();
+                    tokio::spawn(async move {
+                        auth::refresh_provider(&provider, tx).await;
+                    });
+                } else {
+                    self.model_fetch_error = Some(e);
+                }
             }
         }
         self.update_completions();

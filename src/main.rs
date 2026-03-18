@@ -180,6 +180,11 @@ async fn main() -> io::Result<()> {
             app.retry_last_request(&provider);
         }
 
+        if app.retry_model_fetch_after_refresh {
+            app.retry_model_fetch_after_refresh = false;
+            app.start_model_fetch(&provider);
+        }
+
         match run(&mut terminal, &mut app, &provider).await {
             Ok(RunResult::Quit) | Err(_) => break,
 

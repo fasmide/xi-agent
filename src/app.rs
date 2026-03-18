@@ -1167,13 +1167,19 @@ impl App {
             AgentEvent::ToolCallStart { id, name, args } => {
                 self.messages.push(Message::tool_call(id, name, args));
             }
-            AgentEvent::ToolCallEnd {
-                id,
-                name: _name,
-                result,
-            } => {
+            AgentEvent::ToolCallEnd { id, name, result } => {
                 self.messages
-                    .push(Message::tool_result(&id, result.content, result.is_error));
+                    .push(Message::tool_result(&id, result.content.clone(), result.is_error));
+
+                // For ask_user, also record the selected/typed answer as an
+                // explicit user message after the tool_result so the chat log
+                // and persisted history reflect what the user chose.
+                //
+                // Ordering matters: tool_result must immediately follow
+                // tool_call for Anthropic tool_use/tool_result pairing.
+                if name == "ask_user" && !result.is_error {
+                    self.messages.push(Message::user(result.content));
+                }
             }
             AgentEvent::TurnEnd => {
                 self.persist_messages();

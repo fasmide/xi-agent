@@ -361,15 +361,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     // ── Info bar ──────────────────────────────────────────────────────────────
     if app.show_info {
-        let ctx_str = match context_window_for_model(&app.current_model) {
-            Some(n) => format_context_size(n),
-            None => "unknown".to_string(),
-        };
+        let context_window = context_window_for_model(&app.current_model);
+        let used_tokens = app.latest_usage.and_then(|u| u.used_tokens());
         let info_line = build_info_line(
             &app.current_provider,
             &app.current_model,
             app.current_thinking.as_str(),
-            &ctx_str,
+            context_window,
+            used_tokens,
             width,
         );
         f.render_widget(Paragraph::new(vec![info_line]), info_area);
@@ -968,7 +967,8 @@ fn build_info_line<'a>(
     provider: &str,
     model: &str,
     thinking: &str,
-    ctx: &str,
+    context_window: Option<usize>,
+    used_tokens: Option<usize>,
     width: usize,
 ) -> Line<'a> {
     let sep_style = Style::default().fg(Color::Rgb(60, 60, 80)).bg(INFO_BG);
@@ -978,6 +978,7 @@ fn build_info_line<'a>(
     let hint_style = Style::default().fg(Color::Rgb(60, 60, 80)).bg(INFO_BG);
 
     let hint = "Ctrl+I";
+    let context_value = format_context_value(context_window, used_tokens);
     // Build all the content spans.
     let content_spans: Vec<Span<'a>> = vec![
         Span::styled(" ", fill_style),
@@ -995,7 +996,7 @@ fn build_info_line<'a>(
         Span::styled("  │  ", sep_style),
         Span::styled("context", key_style),
         Span::styled(" ", fill_style),
-        Span::styled(format!("{ctx} tokens"), val_style),
+        Span::styled(context_value.clone(), val_style),
     ];
 
     // Calculate used columns (approximate; ASCII only for labels).
@@ -1006,7 +1007,7 @@ fn build_info_line<'a>(
         + 5 // sep
         + "thinking".len() + 1 + thinking.len()
         + 5 // sep
-        + "context".len() + 1 + ctx.len() + " tokens".len();
+        + "context".len() + 1 + context_value.len();
 
     let hint_len = hint.len() + 1; // hint + trailing space
     let fill_len = width.saturating_sub(used + hint_len);
@@ -1017,6 +1018,22 @@ fn build_info_line<'a>(
     spans.push(Span::styled(" ", fill_style));
 
     Line::from(spans)
+}
+
+/// Format context display value for the info line.
+fn format_context_value(context_window: Option<usize>, used_tokens: Option<usize>) -> String {
+    match context_window {
+        Some(max) => {
+            let max_fmt = format_context_size(max);
+            if let Some(used) = used_tokens {
+                let pct = ((used.saturating_mul(100)) / max.max(1)).min(999);
+                format!("{} / {} ({}%)", format_context_size(used), max_fmt, pct)
+            } else {
+                max_fmt
+            }
+        }
+        None => "unknown".to_string(),
+    }
 }
 
 /// Format a context window token count as a human-readable string,
@@ -1145,6 +1162,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn info_context_value_without_usage_shows_window_only() {
+        assert_eq!(format_context_value(Some(128_000), None), "128k");
+    }
+
+    #[test]
+    fn info_context_value_with_usage_shows_ratio_and_percent() {
+        assert_eq!(
+            format_context_value(Some(128_000), Some(32_000)),
+            "32k / 128k (25%)"
+        );
+    }
+
+    #[test]
+    fn info_context_value_unknown_window_stays_unknown() {
+        assert_eq!(format_context_value(None, Some(123)), "unknown");
+    }
+
+    #[test]
+    fn info_line_renders_context_utilization_when_available() {
+        let line = build_info_line(
+            "copilot",
+            "gpt-4o",
+            "medium",
+            Some(128_000),
+            Some(64_000),
+            200,
+        );
+        let text = line_text(&line);
+        assert!(text.contains("context 64k / 128k (50%)"), "{text}");
+    }
     #[test]
     fn split_read_file_header_parses_and_returns_body() {
         let input = "[lines 10-20 of 300]\nalpha\nbeta";

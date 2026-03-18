@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role,
-    ToolDefinition,
+    ToolDefinition, UsageStats,
 };
 
 pub struct OpenAiProvider {
@@ -67,6 +67,7 @@ impl OpenAiProvider {
                 model,
                 messages: oai_messages,
                 stream: true,
+                stream_options: Some(StreamOptions { include_usage: true }),
                 tools: if tools.is_empty() {
                     None
                 } else {
@@ -181,6 +182,14 @@ impl OpenAiProvider {
                         }
                     };
 
+                    if let Some(usage) = chunk.usage {
+                        yield LlmEvent::Usage(UsageStats {
+                            input_tokens: usage.prompt_tokens,
+                            output_tokens: usage.completion_tokens,
+                            total_tokens: usage.total_tokens,
+                        });
+                    }
+
                     for choice in chunk.choices {
                         let delta = choice.delta;
 
@@ -246,7 +255,14 @@ struct ChatRequest {
     messages: Vec<OaiMessage>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OaiToolDef>>,
+}
+
+#[derive(Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Serialize)]
@@ -290,13 +306,23 @@ struct OaiFunctionDef {
 
 #[derive(Deserialize)]
 struct ChatChunk {
+    #[serde(default)]
     choices: Vec<ChunkChoice>,
+    #[serde(default)]
+    usage: Option<ChunkUsage>,
 }
 
 #[derive(Deserialize)]
 struct ChunkChoice {
     delta: Delta,
     finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct ChunkUsage {
+    prompt_tokens: Option<usize>,
+    completion_tokens: Option<usize>,
+    total_tokens: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]

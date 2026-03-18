@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use super::{
     AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role,
-    ToolDefinition,
+    ToolDefinition, UsageStats,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
@@ -288,6 +288,9 @@ impl CodexProvider {
 
                         // ── Stream complete ───────────────────────────────────
                         "response.completed" | "response.done" | "response.incomplete" => {
+                            if let Some(usage) = extract_usage_stats(&ev) {
+                                yield LlmEvent::Usage(usage);
+                            }
                             yield LlmEvent::Done;
                             return;
                         }
@@ -316,6 +319,40 @@ impl CodexProvider {
             }
 
             yield LlmEvent::Done;
+        })
+    }
+}
+
+fn extract_usage_stats(ev: &serde_json::Value) -> Option<UsageStats> {
+    let usage = ev
+        .get("response")
+        .and_then(|r| r.get("usage"))
+        .or_else(|| ev.get("usage"))?;
+
+    let input = usage
+        .get("input_tokens")
+        .or_else(|| usage.get("prompt_tokens"))
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok());
+
+    let output = usage
+        .get("output_tokens")
+        .or_else(|| usage.get("completion_tokens"))
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok());
+
+    let total = usage
+        .get("total_tokens")
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok());
+
+    if input.is_none() && output.is_none() && total.is_none() {
+        None
+    } else {
+        Some(UsageStats {
+            input_tokens: input,
+            output_tokens: output,
+            total_tokens: total,
         })
     }
 }

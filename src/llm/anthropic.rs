@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use super::{
     AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role,
-    ToolDefinition,
+    ToolDefinition, UsageStats,
 };
 
 pub struct AnthropicProvider {
@@ -235,7 +235,16 @@ impl AnthropicProvider {
                             }
                         }
 
+                        Some("message_delta") => {
+                            if let Some(usage) = extract_usage_stats(&ev) {
+                                yield LlmEvent::Usage(usage);
+                            }
+                        }
+
                         Some("message_stop") => {
+                            if let Some(usage) = extract_usage_stats(&ev) {
+                                yield LlmEvent::Usage(usage);
+                            }
                             yield LlmEvent::Done;
                             return;
                         }
@@ -255,6 +264,58 @@ impl AnthropicProvider {
             }
 
             yield LlmEvent::Done;
+        })
+    }
+}
+
+fn extract_usage_stats(ev: &serde_json::Value) -> Option<UsageStats> {
+    let usage = ev
+        .get("usage")
+        .or_else(|| ev.get("message").and_then(|m| m.get("usage")))
+        .or_else(|| ev.get("delta").and_then(|d| d.get("usage")))?;
+
+    let input = usage
+        .get("input_tokens")
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok());
+    let output = usage
+        .get("output_tokens")
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok());
+
+    // Anthropic can expose cache-related counters; include in total when present.
+    let cache_creation = usage
+        .get("cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(0);
+    let cache_read = usage
+        .get("cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(0);
+
+    let total = usage
+        .get("total_tokens")
+        .and_then(|v| v.as_u64())
+        .and_then(|n| usize::try_from(n).ok())
+        .or_else(|| {
+            let i = input?;
+            let o = output?;
+            Some(
+                i.saturating_add(o)
+                    .saturating_add(cache_creation)
+                    .saturating_add(cache_read),
+            )
+        });
+
+    if input.is_none() && output.is_none() && total.is_none() {
+        None
+    } else {
+        Some(UsageStats {
+            input_tokens: input,
+            output_tokens: output,
+            total_tokens: total,
         })
     }
 }

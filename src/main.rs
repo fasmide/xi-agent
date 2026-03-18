@@ -738,6 +738,9 @@ async fn run_print_mode(
             AgentEvent::ThinkingToken(_) => {
                 // Suppress thinking tokens in print mode.
             }
+            AgentEvent::Usage(_) => {
+                // Suppress usage events in print mode.
+            }
             AgentEvent::ToolIntentStart => {
                 // No-op in print mode.
             }

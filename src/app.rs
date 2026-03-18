@@ -12,7 +12,7 @@ use crate::{
     },
     auth::{self, LoginEvent},
     commands::{self, CompletionItem},
-    llm::{AssistantPhase, LlmProvider, Message, Role},
+    llm::{AssistantPhase, LlmProvider, Message, Role, UsageStats},
     provider::ProviderKind,
     session::SessionStore,
     skills::SkillMeta,
@@ -108,6 +108,8 @@ pub struct App {
     /// When true, the info bar (provider / model / context window) is shown
     /// below the input panel.  Toggled by Ctrl+I.
     pub show_info: bool,
+    /// Best-effort token usage reported for the latest completed turn.
+    pub latest_usage: Option<UsageStats>,
 
     // ── Login overlay ─────────────────────────────────────────────────────────
     pub login_active: bool,
@@ -149,8 +151,7 @@ pub struct App {
     /// JoinHandle for the currently running agent loop task (if any).
     agent_task: Option<JoinHandle<()>>,
     /// Receives model lists forwarded from `list_models` tasks.
-    pub(crate) models_rx:
-        tokio::sync::mpsc::UnboundedReceiver<Result<Vec<String>, String>>,
+    pub(crate) models_rx: tokio::sync::mpsc::UnboundedReceiver<Result<Vec<String>, String>>,
     models_tx: tokio::sync::mpsc::UnboundedSender<Result<Vec<String>, String>>,
     /// Receives login status events from background auth tasks.
     pub(crate) login_rx: tokio::sync::mpsc::UnboundedReceiver<LoginEvent>,
@@ -201,6 +202,7 @@ impl App {
             selection_selected: 0,
             selection_scroll: 0,
             show_info: false,
+            latest_usage: None,
             login_active: false,
             login_provider: None,
             login_info: String::new(),
@@ -391,7 +393,8 @@ impl App {
         let available = self.available_models.as_deref();
         let loading = self.models_loading;
         let fetch_error = self.model_fetch_error.as_deref();
-        let new = commands::completions_for(&input, available, loading, fetch_error, &self.loaded_skills);
+        let new =
+            commands::completions_for(&input, available, loading, fetch_error, &self.loaded_skills);
 
         if new.len() != self.completions.len() {
             self.completion_selected = 0;
@@ -1025,6 +1028,7 @@ impl App {
         self.messages.push(Message::user(trimmed));
         self.persist_messages();
         self.reset_textarea();
+        self.latest_usage = None;
         self.auto_scroll = true;
         self.streaming = true;
         self.auth_retry_budget = 1;
@@ -1060,6 +1064,7 @@ impl App {
         self.messages.push(msg);
         self.persist_messages();
         self.reset_textarea();
+        self.latest_usage = None;
         self.auto_scroll = true;
         self.streaming = true;
         self.auth_retry_budget = 1;
@@ -1088,6 +1093,7 @@ impl App {
         }
 
         self.streaming = true;
+        self.latest_usage = None;
         self.auto_scroll = true;
 
         let llm_messages: Vec<Message> = self
@@ -1143,6 +1149,9 @@ impl App {
                         .push_str(&token);
                 }
             }
+            AgentEvent::Usage(usage) => {
+                self.latest_usage = Some(usage);
+            }
             AgentEvent::TextToken { text, phase } => {
                 self.ensure_assistant_message();
                 if let Some(last) = self.messages.last_mut() {
@@ -1168,8 +1177,11 @@ impl App {
                 self.messages.push(Message::tool_call(id, name, args));
             }
             AgentEvent::ToolCallEnd { id, name, result } => {
-                self.messages
-                    .push(Message::tool_result(&id, result.content.clone(), result.is_error));
+                self.messages.push(Message::tool_result(
+                    &id,
+                    result.content.clone(),
+                    result.is_error,
+                ));
 
                 // For ask_user, also record the selected/typed answer as an
                 // explicit user message after the tool_result so the chat log

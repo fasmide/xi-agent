@@ -46,12 +46,14 @@ User keystroke → App::submit
        └─ drain steering_rx → insert queued user messages before each turn
           for each turn:
             provider.stream_chat_with_tools(messages, tool_defs)
-              └─ yields LlmEvent::{Token{..}, ThinkingToken, ToolIntentStart, ToolCall, Done, Error}
+              └─ yields LlmEvent::{Token{..}, ThinkingToken, Usage,
+                                   ToolIntentStart, ToolCall, Done, Error}
             if ToolCall → tool.execute(args) → ToolResult
               └─ drain steering_rx after each tool → skip remaining tools if non-empty
             loop until no tool calls
-            sends AgentEvent::{TextToken{..}, ThinkingToken, ToolIntentStart,
-                               SteeringConsumed, ToolCallStart, ToolCallEnd,
+            sends AgentEvent::{TextToken{..}, ThinkingToken, Usage,
+                               ToolIntentStart, SteeringConsumed,
+                               ToolCallStart, ToolCallEnd,
                                TurnEnd, Done, Error} on tx
 
 User keystroke (while streaming) → App::enqueue_steering_from_input
@@ -68,6 +70,12 @@ User keystroke (while streaming) → App::enqueue_steering_from_input
 ```rust
 pub enum AssistantPhase { Unknown, Provisional, Final }
 
+pub struct UsageStats {
+    pub input_tokens: Option<usize>,
+    pub output_tokens: Option<usize>,
+    pub total_tokens: Option<usize>,
+}
+
 pub struct Message {
     pub role: Role,                      // System | User | Assistant | ToolCall | ToolResult
     pub content: String,
@@ -82,6 +90,7 @@ pub struct Message {
 pub enum LlmEvent {
     Token { text: String, phase: AssistantPhase },
     ThinkingToken(String),
+    Usage(UsageStats),
     ToolIntentStart,
     ToolCall { id: String, name: String, args: serde_json::Value },
     Done,
@@ -108,6 +117,7 @@ pub trait Tool: Send + Sync {
 pub enum AgentEvent {
     TextToken { text: String, phase: AssistantPhase },
     ThinkingToken(String),
+    Usage(UsageStats),
     ToolIntentStart,
     SteeringConsumed { text: String },
     ToolCallStart { id, name, args },

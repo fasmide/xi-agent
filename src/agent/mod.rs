@@ -85,6 +85,9 @@ pub async fn run_agent_loop(
                         .get_or_insert_with(String::new)
                         .push_str(&t);
                 }
+                LlmEvent::Usage(usage) => {
+                    let _ = tx.send(AgentEvent::Usage(usage));
+                }
                 LlmEvent::ToolIntentStart => {
                     let _ = tx.send(AgentEvent::ToolIntentStart);
                     assistant_phase = AssistantPhase::Provisional;

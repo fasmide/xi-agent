@@ -7,6 +7,27 @@ pub enum AssistantPhase {
     Final,
 }
 
+/// Normalized token usage reported by a provider for a completed turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UsageStats {
+    pub input_tokens: Option<usize>,
+    pub output_tokens: Option<usize>,
+    pub total_tokens: Option<usize>,
+}
+
+impl UsageStats {
+    /// Best-effort count of used tokens for utilization display.
+    pub fn used_tokens(&self) -> Option<usize> {
+        self.total_tokens
+            .or_else(|| match (self.input_tokens, self.output_tokens) {
+                (Some(i), Some(o)) => Some(i.saturating_add(o)),
+                _ => None,
+            })
+            .or(self.input_tokens)
+            .or(self.output_tokens)
+    }
+}
+
 /// A single message in the conversation history.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Message {
@@ -147,6 +168,8 @@ pub enum LlmEvent {
     ThinkingToken(String),
     /// A token chunk from the model's answer with phase classification.
     Token { text: String, phase: AssistantPhase },
+    /// Final/best-effort token usage stats for the turn.
+    Usage(UsageStats),
     /// The provider indicated that an assistant tool call is forthcoming.
     ToolIntentStart,
     /// The model requested a tool call.

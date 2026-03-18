@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, Role,
-    ToolDefinition,
+    ToolDefinition, UsageStats,
 };
 
 pub struct OllamaProvider {
@@ -86,6 +86,10 @@ struct ChatChunk {
     message: ChunkMessage,
     #[serde(default)]
     done: bool,
+    #[serde(default)]
+    prompt_eval_count: Option<usize>,
+    #[serde(default)]
+    eval_count: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +214,16 @@ fn parse_ndjson_line(
                 }
             }
             if chunk.done {
+                if chunk.prompt_eval_count.is_some() || chunk.eval_count.is_some() {
+                    events.push(LlmEvent::Usage(UsageStats {
+                        input_tokens: chunk.prompt_eval_count,
+                        output_tokens: chunk.eval_count,
+                        total_tokens: match (chunk.prompt_eval_count, chunk.eval_count) {
+                            (Some(i), Some(o)) => Some(i.saturating_add(o)),
+                            _ => None,
+                        },
+                    }));
+                }
                 events.push(LlmEvent::Done);
                 return true;
             }

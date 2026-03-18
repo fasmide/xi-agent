@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
-use crate::llm::AssistantPhase;
+use crate::llm::{AssistantPhase, UsageStats};
 
 // ── Tool result ───────────────────────────────────────────────────────────────
 
@@ -89,6 +89,8 @@ pub enum AgentEvent {
     TextToken { text: String, phase: AssistantPhase },
     /// A token chunk from the model's thinking / chain-of-thought block.
     ThinkingToken(String),
+    /// Final/best-effort token usage stats for the turn.
+    Usage(UsageStats),
     /// The provider indicated that an assistant tool call is forthcoming.
     ToolIntentStart,
     /// A queued steering message was consumed and inserted into loop history.

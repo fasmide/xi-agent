@@ -8,6 +8,7 @@ use crate::agent::types::{AgentEvent, Tool};
 use crate::agent::{AgentLoopConfig, run_agent_loop};
 use crate::llm::{
     AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ToolDefinition,
+    UsageStats,
 };
 
 // ── MockProvider ──────────────────────────────────────────────────────────────
@@ -126,6 +127,35 @@ async fn agent_loop_single_text_turn() {
         matches!(events.last().unwrap(), AgentEvent::Done),
         "expected Done as last event, got: {:?}",
         events.last()
+    );
+}
+
+#[tokio::test]
+async fn agent_loop_forwards_usage_event() {
+    let provider = MockProvider::new(vec![vec![
+        LlmEvent::Usage(UsageStats {
+            input_tokens: Some(10),
+            output_tokens: Some(5),
+            total_tokens: Some(15),
+        }),
+        LlmEvent::Token {
+            text: "hello".to_string(),
+            phase: AssistantPhase::Unknown,
+        },
+        LlmEvent::Done,
+    ]]);
+    let events = run_and_collect(provider).await;
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            AgentEvent::Usage(UsageStats {
+                input_tokens: Some(10),
+                output_tokens: Some(5),
+                total_tokens: Some(15)
+            })
+        )),
+        "expected forwarded usage event"
     );
 }
 

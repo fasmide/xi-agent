@@ -6,7 +6,7 @@ use crate::{
     llm::{
         LlmProvider,
         codex::{CodexProvider, DEFAULT_BASE_URL as CODEX_DEFAULT_BASE_URL},
-        copilot,
+        copilot::CopilotProvider,
         ollama::OllamaProvider,
         openai::OpenAiProvider,
     },
@@ -136,24 +136,6 @@ pub enum ThinkingSupport {
     Ignored(&'static str),
 }
 
-impl CopilotApiRoute {
-    fn api_name(&self) -> &'static str {
-        match self {
-            Self::OpenAiChatCompletions => "openai-chat-completions",
-            Self::AnthropicMessages => "anthropic-messages",
-            Self::OpenAiResponses => "openai-responses",
-        }
-    }
-
-    fn endpoint_hint(&self) -> &'static str {
-        match self {
-            Self::OpenAiChatCompletions => "/chat/completions",
-            Self::AnthropicMessages => "/v1/messages",
-            Self::OpenAiResponses => "/v1/responses",
-        }
-    }
-}
-
 /// Classify Copilot model routing in a provider-agnostic way.
 ///
 /// This mirrors pi-mono's model metadata behavior:
@@ -207,37 +189,18 @@ pub fn build_provider(
             let creds = store.get_copilot().ok_or_else(|| {
                 anyhow::anyhow!("Not authenticated for copilot. Run /login copilot.")
             })?;
-            let route = classify_copilot_route(model);
             log::debug!(
-                "provider route selected: provider=copilot model={} api={} endpoint_hint={} base_url={}",
+                "provider route selected: provider=copilot model={} base_url={}",
                 model,
-                route.api_name(),
-                route.endpoint_hint(),
                 creds.base_url.as_deref().unwrap_or("<from-token>")
             );
-            if route == CopilotApiRoute::AnthropicMessages {
-                let p = copilot::anthropic_from_access_token(
-                    &creds.access_token,
-                    model,
-                    creds.base_url.as_deref(),
-                );
-                Ok(Arc::new(p))
-            } else if route == CopilotApiRoute::OpenAiResponses {
-                let p = copilot::codex_from_access_token(
-                    &creds.access_token,
-                    model,
-                    creds.base_url.as_deref(),
-                )
-                .with_reasoning_effort(thinking.to_reasoning_effort().map(ToString::to_string));
-                Ok(Arc::new(p))
-            } else {
-                let p = copilot::from_access_token(
-                    &creds.access_token,
-                    model,
-                    creds.base_url.as_deref(),
-                );
-                Ok(Arc::new(p))
-            }
+            let p = CopilotProvider::new(
+                &creds.access_token,
+                model,
+                creds.base_url.as_deref(),
+                thinking.to_reasoning_effort().map(ToString::to_string),
+            );
+            Ok(Arc::new(p))
         }
         ProviderKind::OpenAi => {
             let base_url = config

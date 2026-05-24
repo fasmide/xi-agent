@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc,
+        Arc, LazyLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -12,8 +12,14 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::types::GeminiCredentials;
 
-const CLIENT_ID: &str = "__REDACTED__";
-const CLIENT_SECRET: &str = "__REDACTED__";
+static CLIENT_ID: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("GOOGLE_CLIENT_ID")
+        .expect("GOOGLE_CLIENT_ID environment variable is required for Gemini OAuth")
+});
+static CLIENT_SECRET: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("GOOGLE_CLIENT_SECRET")
+        .expect("GOOGLE_CLIENT_SECRET environment variable is required for Gemini OAuth")
+});
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const REDIRECT_URI: &str = "http://localhost:8085/oauth2callback";
@@ -87,7 +93,7 @@ pub async fn login(
     let mut url = reqwest::Url::parse(AUTH_URL)?;
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("client_id", CLIENT_ID);
+        qp.append_pair("client_id", CLIENT_ID.as_str());
         qp.append_pair("response_type", "code");
         qp.append_pair("redirect_uri", REDIRECT_URI);
         qp.append_pair("scope", &SCOPES.join(" "));
@@ -132,8 +138,8 @@ pub async fn refresh(refresh_token: &str, project_id: &str) -> anyhow::Result<Ge
     let client = reqwest::Client::new();
     let token_body = format!(
         "client_id={}&client_secret={}&refresh_token={}&grant_type=refresh_token",
-        urlencoding::encode(CLIENT_ID),
-        urlencoding::encode(CLIENT_SECRET),
+        urlencoding::encode(CLIENT_ID.as_str()),
+        urlencoding::encode(CLIENT_SECRET.as_str()),
         urlencoding::encode(refresh_token)
     );
 
@@ -162,8 +168,8 @@ async fn exchange_authorization_code(code: &str, verifier: &str) -> anyhow::Resu
     let client = reqwest::Client::new();
     let token_body = format!(
         "client_id={}&client_secret={}&code={}&grant_type=authorization_code&redirect_uri={}&code_verifier={}",
-        urlencoding::encode(CLIENT_ID),
-        urlencoding::encode(CLIENT_SECRET),
+        urlencoding::encode(CLIENT_ID.as_str()),
+        urlencoding::encode(CLIENT_SECRET.as_str()),
         urlencoding::encode(code),
         urlencoding::encode(REDIRECT_URI),
         urlencoding::encode(verifier),

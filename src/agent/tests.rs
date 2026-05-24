@@ -505,9 +505,9 @@ fn test_read_agents_md() {
     let working_path = temp_working.path();
 
     // Simulate ~/.xi/AGENTS.md
-    let tau_agents_md = home_path.join(".xi/AGENTS.md");
-    fs::create_dir_all(tau_agents_md.parent().unwrap()).unwrap();
-    fs::write(&tau_agents_md, "Global agents configuration\n").unwrap();
+    let xi_agents_md = home_path.join(".xi/AGENTS.md");
+    fs::create_dir_all(xi_agents_md.parent().unwrap()).unwrap();
+    fs::write(&xi_agents_md, "Global agents configuration\n").unwrap();
 
     // Simulate AGENTS.md at cwd.
     let cwd_agents_md = working_path.join("AGENTS.md");
@@ -535,9 +535,9 @@ fn test_read_agents_md_from_nested_cwd_includes_parent_chain_in_order() {
     let home_path = temp_home.path();
 
     // Simulate ~/.xi/AGENTS.md
-    let tau_agents_md = home_path.join(".xi/AGENTS.md");
-    fs::create_dir_all(tau_agents_md.parent().unwrap()).unwrap();
-    fs::write(&tau_agents_md, "Global config\n").unwrap();
+    let xi_agents_md = home_path.join(".xi/AGENTS.md");
+    fs::create_dir_all(xi_agents_md.parent().unwrap()).unwrap();
+    fs::write(&xi_agents_md, "Global config\n").unwrap();
 
     // Build nested workspace: <root>/project/subdir
     let root = tempdir().unwrap();

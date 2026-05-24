@@ -1,4 +1,4 @@
-//! A hidden test provider for exercising the tau UI without a real API
+//! A hidden test provider for exercising the xi-agent UI without a real API
 //! connection.  Activated via `--provider=test` or `/provider test`.
 //! Never appears in the provider selection menu.  Never persists to config.
 
@@ -47,7 +47,7 @@ const ASK_NOTYPE_QUESTION: &str = "Select one of the following:";
 
 const MARKDOWN_FIXTURE: &str = r#"# Markdown Showcase
 
-This document exercises **every** major markdown feature rendered by tau. It is intentionally long and verbose so that scrolling, wrapping, and layout can all be verified in a single pass.
+This document exercises **every** major markdown feature rendered by xi-agent. It is intentionally long and verbose so that scrolling, wrapping, and layout can all be verified in a single pass.
 
 ## Text styles
 
@@ -107,7 +107,7 @@ fn main() {
 
 ## Blockquote
 
-> The test provider exists so you can exercise the tau UI without burning real tokens or requiring authentication. It simulates every kind of LLM event — text tokens, thinking tokens, tool calls, status updates, and errors — through a simple command interface.
+> The test provider exists so you can exercise the xi-agent UI without burning real tokens or requiring authentication. It simulates every kind of LLM event — text tokens, thinking tokens, tool calls, status updates, and errors — through a simple command interface.
 >
 > Nested quote:
 >
@@ -159,10 +159,10 @@ End of markdown fixture. Scroll back up to verify that all sections rendered cor
 
 // ── Emoji fixture ─────────────────────────────────────────────────────────────
 
-/// A fixture that lists every emoji used in tau's tool labels so that
+/// A fixture that lists every emoji used in xi-agent's tool labels so that
 /// rendering alignment can be verified visually in the terminal.
 ///
-/// Each line shows: the emoji (as tau would render it in a tool label),
+/// Each line shows: the emoji (as xi-agent would render it in a tool label),
 /// a pipe, then a descriptive name.  The pipe should be vertically aligned
 /// if all emojis advance the cursor by exactly 2 columns.
 const EMOJI_FIXTURE: &str = "\
@@ -300,7 +300,7 @@ fn ask_user_stream(
 /// Build a tool call stream for `write_file` targeting the system temp directory.
 fn write_file_stream() -> LlmStream {
     let path = std::env::temp_dir()
-        .join("tau-test-write.txt")
+        .join("xi-test-write.txt")
         .to_string_lossy()
         .into_owned();
     Box::pin(stream! {
@@ -313,7 +313,7 @@ fn write_file_stream() -> LlmStream {
             name: "write_file".to_string(),
             args: serde_json::json!({
                 "path": path,
-                "content": "Hello from the tau test provider!\n",
+                "content": "Hello from the xi-agent test provider!\n",
             }),
         };
         yield LlmEvent::Done;
@@ -323,14 +323,14 @@ fn write_file_stream() -> LlmStream {
 /// Temp file path used by write/read/edit test commands.
 fn test_temp_path() -> String {
     std::env::temp_dir()
-        .join("tau-test-write.txt")
+        .join("xi-test-write.txt")
         .to_string_lossy()
         .into_owned()
 }
 
 /// Short fixture content (≤8 lines) for `read` command.
 const READ_SHORT_FIXTURE: &str = "\
-line 1: Hello from the tau test provider\n\
+line 1: Hello from the xi-agent test provider\n\
 line 2: This file exercises read_file rendering\n\
 line 3: It is short enough to display without truncation\n\
 line 4: End of short fixture\n\
@@ -852,7 +852,7 @@ impl super::LlmProvider for TestProvider {
             "write-edit" => {
                 // Generate a random temp file path, store it, then stream write_file.
                 let fname = format!(
-                    "tau-test-write-edit-{}.txt",
+                    "xi-test-write-edit-{}.txt",
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.subsec_nanos())
@@ -875,8 +875,8 @@ impl super::LlmProvider for TestProvider {
 
             "edit" => {
                 // Short edit: both sides within the 4-line diff limit.
-                let old = "Hello from the tau test provider\n".to_string();
-                let new = "Hello from the tau test provider — edited!\n".to_string();
+                let old = "Hello from the xi-agent test provider\n".to_string();
+                let new = "Hello from the xi-agent test provider — edited!\n".to_string();
                 edit_file_stream(old, new)
             }
 

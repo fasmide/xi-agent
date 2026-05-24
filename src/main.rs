@@ -68,7 +68,7 @@ use agent::{
 use app::{App, InputMode, SelectionResult};
 use app_event::AppEvent;
 use commands::CommandAction;
-use config::TauConfig;
+use config::XiConfig;
 use llm::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture};
 use provider::{ThinkingSupport, build_provider_for_instance, thinking_support_for_instance};
 use provider_instance::{AuthMode, EndpointBehavior, ProviderInstance};
@@ -102,7 +102,7 @@ struct Cli {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-/// Build a [`FileTracker`] pre-configured to ignore tau's own generated files:
+/// Build a [`FileTracker`] pre-configured to ignore xi-agent's own generated files:
 ///
 /// - Session files (data dir `sessions/` subtree).
 /// - Debug logs (cache dir).
@@ -128,11 +128,11 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let mut config = match TauConfig::load() {
+    let mut config = match XiConfig::load() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("warning: failed to load config.toml: {e}");
-            TauConfig::default()
+            XiConfig::default()
         }
     };
 
@@ -626,7 +626,7 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     provider: &Arc<dyn LlmProvider + Send + Sync>,
-    config: &TauConfig,
+    config: &XiConfig,
 ) -> io::Result<RunResult> {
     let mut crossterm_events = EventStream::new();
     let mut tick_interval = tokio::time::interval(std::time::Duration::from_millis(320));
@@ -705,7 +705,7 @@ async fn run(
 fn handle_key_event(
     app: &mut App,
     provider: &Arc<dyn LlmProvider + Send + Sync>,
-    config: &TauConfig,
+    config: &XiConfig,
     key: KeyEvent,
     #[cfg(windows)] last_key_at: &mut Option<std::time::Instant>,
 ) -> Option<RunResult> {
@@ -863,7 +863,7 @@ fn handle_shell_mode_key(
     KeyDispatch::Continue
 }
 
-fn handle_selection_mode_key(app: &mut App, config: &TauConfig, key: KeyEvent) -> KeyDispatch {
+fn handle_selection_mode_key(app: &mut App, config: &XiConfig, key: KeyEvent) -> KeyDispatch {
     match key.code {
         KeyCode::Up => {
             app.selection_select_prev();
@@ -1031,7 +1031,7 @@ fn handle_selection_enter(app: &mut App) -> KeyDispatch {
 fn handle_chat_mode_key(
     app: &mut App,
     provider: &Arc<dyn LlmProvider + Send + Sync>,
-    config: &TauConfig,
+    config: &XiConfig,
     key: KeyEvent,
     #[cfg(windows)] last_key_at: Option<&std::time::Instant>,
 ) -> KeyDispatch {
@@ -1122,7 +1122,7 @@ fn handle_chat_mode_key(
 fn handle_chat_submit(
     app: &mut App,
     provider: &Arc<dyn LlmProvider + Send + Sync>,
-    config: &TauConfig,
+    config: &XiConfig,
 ) -> KeyDispatch {
     match app.provider.setup_step.clone() {
         ProviderSetupStep::Endpoint => {
@@ -1252,7 +1252,7 @@ fn handle_chat_submit(
 fn handle_slash_submit(
     app: &mut App,
     provider: &Arc<dyn LlmProvider + Send + Sync>,
-    config: &TauConfig,
+    config: &XiConfig,
 ) -> KeyDispatch {
     let input = app.slash_submit_text().unwrap_or_default();
     app.reset_textarea();
@@ -1389,7 +1389,7 @@ fn apply_paste(app: &mut App, provider: &Arc<dyn LlmProvider + Send + Sync>, tex
 /// 1. `config.provider` matched against instance ids
 /// 2. First instance in `config.providers`
 /// 3. Synthetic copilot default
-fn resolve_default_provider_instance(config: &TauConfig) -> ProviderInstance {
+fn resolve_default_provider_instance(config: &XiConfig) -> ProviderInstance {
     if let Some(ref id) = config.provider
         && let Some(inst) = config.find_provider(id)
     {
@@ -1403,7 +1403,7 @@ fn resolve_default_provider_instance(config: &TauConfig) -> ProviderInstance {
 
 fn resolve_provider_instance(
     cli_override: Option<&str>,
-    config: &TauConfig,
+    config: &XiConfig,
 ) -> Result<ProviderInstance, String> {
     if let Some(id) = cli_override {
         if id == "test" {
@@ -1431,7 +1431,7 @@ fn resolve_provider_instance(
     Ok(resolve_default_provider_instance(config))
 }
 
-fn resolve_current_run_instance(app: &App, config: &TauConfig) -> ProviderInstance {
+fn resolve_current_run_instance(app: &App, config: &XiConfig) -> ProviderInstance {
     config
         .find_provider(&app.provider.current_instance.id)
         .cloned()
@@ -1449,7 +1449,7 @@ fn resolve_model_for_instance(cli_override: Option<&str>, instance: &ProviderIns
 /// Instance-based variant of `persist_provider_model_selection`.
 ///
 /// Updates the named instance's model in the providers list and persists config.
-fn persist_provider_model_selection_v2(config: &mut TauConfig, app: &mut App) {
+fn persist_provider_model_selection_v2(config: &mut XiConfig, app: &mut App) {
     let instance = &app.provider.current_instance;
     let model = &app.provider.current_model;
     let thinking = app.provider.current_thinking;
@@ -1477,7 +1477,7 @@ fn persist_provider_model_selection_v2(config: &mut TauConfig, app: &mut App) {
     }
 }
 
-fn resolve_thinking_level_for_model(config: &TauConfig, model: &str) -> ThinkingLevel {
+fn resolve_thinking_level_for_model(config: &XiConfig, model: &str) -> ThinkingLevel {
     config
         .thinking_by_model
         .get(model)
@@ -1513,7 +1513,7 @@ fn maybe_warn_thinking_unsupported(app: &mut App) {
 struct PrintModeProviderCtx<'a> {
     instance: &'a ProviderInstance,
     thinking: ThinkingLevel,
-    tau_config: &'a TauConfig,
+    xi_config: &'a XiConfig,
     name: &'a str,
 }
 
@@ -1572,7 +1572,7 @@ async fn run_print_mode(
     prompt: String,
     provider_override: &str,
     model_override: Option<&str>,
-    config: &TauConfig,
+    config: &XiConfig,
 ) -> io::Result<()> {
     let current_instance = resolve_provider_instance(Some(provider_override), config)
         .map_err(|e| io::Error::new(ErrorKind::InvalidInput, e))?;
@@ -1617,7 +1617,7 @@ async fn run_print_mode(
     let provider_ctx = PrintModeProviderCtx {
         instance: &current_instance,
         thinking: current_thinking,
-        tau_config: config,
+        xi_config: config,
         name: &provider_name,
     };
 
@@ -1724,7 +1724,7 @@ async fn run_print_mode_loop(
                             match build_provider_for_instance(
                                 ctx.instance,
                                 ctx.thinking,
-                                ctx.tau_config,
+                                ctx.xi_config,
                             ) {
                                 Ok(new_provider) => {
                                     // Run the loop a second time with the refreshed provider.
@@ -1876,7 +1876,7 @@ mod tests {
         resolve_model_for_instance, resolve_provider_instance, resolve_thinking_level_for_model,
     };
     use crate::{
-        config::TauConfig,
+        config::XiConfig,
         llm::ProviderError,
         provider_instance::{BackendPreset, ProviderInstance},
         provider_manager::format_provider_error_for_display,
@@ -1891,7 +1891,7 @@ mod tests {
 
     #[test]
     fn resolve_provider_instance_accepts_exact_configured_provider_id() {
-        let mut cfg = TauConfig::default();
+        let mut cfg = XiConfig::default();
         cfg.providers.push(ProviderInstance::new(
             "work-webui",
             BackendPreset::OpenWebUi,
@@ -1906,7 +1906,7 @@ mod tests {
 
     #[test]
     fn resolve_provider_instance_accepts_hidden_test_provider() {
-        let cfg = TauConfig::default();
+        let cfg = XiConfig::default();
 
         let instance = resolve_provider_instance(Some("test"), &cfg).expect("test should resolve");
 
@@ -1916,7 +1916,7 @@ mod tests {
 
     #[test]
     fn resolve_provider_instance_rejects_unknown_cli_provider() {
-        let mut cfg = TauConfig::default();
+        let mut cfg = XiConfig::default();
         cfg.providers
             .push(ProviderInstance::new("copilot", BackendPreset::Copilot));
         cfg.providers.push(ProviderInstance::new(
@@ -1935,9 +1935,9 @@ mod tests {
 
     #[test]
     fn resolve_default_provider_instance_prefers_configured_default() {
-        let mut cfg = TauConfig {
+        let mut cfg = XiConfig {
             provider: Some("work-webui".to_string()),
-            ..TauConfig::default()
+            ..XiConfig::default()
         };
         cfg.providers
             .push(ProviderInstance::new("copilot", BackendPreset::Copilot));
@@ -1954,7 +1954,7 @@ mod tests {
 
     #[test]
     fn resolve_default_provider_instance_falls_back_to_synthetic_copilot() {
-        let cfg = TauConfig::default();
+        let cfg = XiConfig::default();
 
         let instance = resolve_default_provider_instance(&cfg);
 
@@ -1979,9 +1979,9 @@ mod tests {
 
     #[test]
     fn resolve_thinking_uses_model_specific_config() {
-        let mut cfg = TauConfig {
+        let mut cfg = XiConfig {
             thinking: Some("minimal".to_string()),
-            ..TauConfig::default()
+            ..XiConfig::default()
         };
         cfg.thinking_by_model
             .insert("gpt-5".to_string(), "high".to_string());
@@ -1992,9 +1992,9 @@ mod tests {
 
     #[test]
     fn resolve_thinking_falls_back_to_global_config() {
-        let cfg = TauConfig {
+        let cfg = XiConfig {
             thinking: Some("minimal".to_string()),
-            ..TauConfig::default()
+            ..XiConfig::default()
         };
         let level = resolve_thinking_level_for_model(&cfg, "gpt-4o");
         assert_eq!(level, ThinkingLevel::Minimal);
@@ -2002,7 +2002,7 @@ mod tests {
 
     #[test]
     fn resolve_thinking_defaults_to_off() {
-        let cfg = TauConfig::default();
+        let cfg = XiConfig::default();
         let level = resolve_thinking_level_for_model(&cfg, "gpt-4o");
         assert_eq!(level, ThinkingLevel::Off);
     }

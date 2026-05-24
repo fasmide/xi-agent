@@ -229,12 +229,12 @@ mod tests {
         let args = serde_json::json!({
             "program": "sh",
             "args": ["-c", "echo $MYVAR"],
-            "env": {"MYVAR": "tau_test_value"}
+            "env": {"MYVAR": "xi_test_value"}
         });
         let result = tool.execute(args).await;
         assert!(!result.is_error);
         assert!(
-            result.content.as_text().contains("tau_test_value"),
+            result.content.as_text().contains("xi_test_value"),
             "env var not set: {}",
             result.content.as_text()
         );
@@ -256,7 +256,7 @@ mod tests {
     #[tokio::test]
     async fn exec_unknown_program_is_error() {
         let tool = ExecTool;
-        let args = serde_json::json!({"program": "__no_such_program_tau__"});
+        let args = serde_json::json!({"program": "__no_such_program_xi__"});
         let result = tool.execute(args).await;
         assert!(result.is_error);
         assert!(

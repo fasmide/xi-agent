@@ -5,7 +5,7 @@ use anyhow::Context;
 use crate::provider_instance::ProviderInstance;
 
 #[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize)]
-pub struct TauConfig {
+pub struct XiConfig {
     /// The id of the currently active provider instance.
     pub provider: Option<String>,
     pub thinking: Option<String>,
@@ -29,7 +29,7 @@ pub struct TauConfig {
     pub gemini: GeminiConfig,
 }
 
-impl TauConfig {
+impl XiConfig {
     /// Return a reference to the provider instance with the given id, if any.
     pub fn find_provider(&self, id: &str) -> Option<&ProviderInstance> {
         self.providers.iter().find(|p| p.id == id)
@@ -81,8 +81,8 @@ pub struct GeminiConfig {
     pub model: Option<String>,
 }
 
-impl TauConfig {
-    /// Load from $XDG_CONFIG_HOME/tau/config.toml (or ~/.config/tau/config.toml).
+impl XiConfig {
+    /// Load from $XDG_CONFIG_HOME/xi/config.toml (or ~/.config/xi/config.toml).
     /// Missing file is not an error and returns `Default`.
     pub fn load() -> anyhow::Result<Self> {
         let path = config_path()?;
@@ -124,7 +124,7 @@ pub fn config_path() -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::TauConfig;
+    use super::XiConfig;
     use crate::provider_instance::{ApiType, BackendPreset};
 
     // ── Instance-format config tests ─────────────────────────────────────────
@@ -161,7 +161,7 @@ model = "llama3.1"
 recent_endpoints = ["http://localhost:11434", "http://gpu-box:11434"]
 "#;
 
-        let cfg = TauConfig::from_toml_str(raw).expect("config parses");
+        let cfg = XiConfig::from_toml_str(raw).expect("config parses");
 
         assert_eq!(cfg.provider.as_deref(), Some("openai"));
         assert_eq!(cfg.thinking.as_deref(), Some("low"));
@@ -221,7 +221,7 @@ base_url = "https://my-webui.example.com"
 api_key = "token123"
 model = "llama3.1"
 "#;
-        let cfg = TauConfig::from_toml_str(raw).unwrap();
+        let cfg = XiConfig::from_toml_str(raw).unwrap();
         assert!(cfg.providers.is_empty());
         assert!(cfg.find_provider("copilot").is_none());
         assert!(cfg.find_provider("openai").is_none());
@@ -250,7 +250,7 @@ backend_preset = "ollama"
 api_type = "ollama-chat-api"
 base_url = "http://gpu-box:11434"
 "#;
-        let cfg = TauConfig::from_toml_str(raw).unwrap();
+        let cfg = XiConfig::from_toml_str(raw).unwrap();
         assert_eq!(cfg.providers.len(), 2);
 
         let webui = cfg.find_provider("work-webui").unwrap();
@@ -268,7 +268,7 @@ base_url = "http://gpu-box:11434"
 
     #[test]
     fn upsert_and_remove_provider() {
-        let mut cfg = TauConfig::default();
+        let mut cfg = XiConfig::default();
         use crate::provider_instance::ProviderInstance;
         let inst = ProviderInstance::new("my-ollama", BackendPreset::Ollama);
         cfg.upsert_provider(inst);
@@ -291,7 +291,7 @@ base_url = "http://gpu-box:11434"
 
     #[test]
     fn upsert_provider_replaces_existing_provider_after_rename_when_old_id_removed() {
-        let mut cfg = TauConfig::default();
+        let mut cfg = XiConfig::default();
         let mut original =
             crate::provider_instance::ProviderInstance::new("gpu-box", BackendPreset::Ollama);
         original.base_url = Some("http://gpu-box:11434".to_string());

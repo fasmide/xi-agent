@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This document defines tau's backend model.
+This document defines xi-agent's backend model.
 
 It specifies:
 
-- the domain concepts tau uses for backend integrations
+- the domain concepts xi-agent uses for backend integrations
 - the relationship between provider, service, API, endpoint, preset, and instance
 - how the interactive UI presents those concepts
 - how configuration represents those concepts
@@ -37,7 +37,7 @@ Examples:
 
 ### Service
 
-A **service** is the backend product or software tau talks to.
+A **service** is the backend product or software xi-agent talks to.
 
 A service defines:
 
@@ -63,7 +63,7 @@ A service may be:
 
 ### API
 
-An **API** is the protocol surface tau uses to communicate with a service.
+An **API** is the protocol surface xi-agent uses to communicate with a service.
 
 Examples:
 
@@ -79,11 +79,11 @@ The API determines:
 - response shape
 - streaming format
 - tool-calling behavior
-- model selection semantics exposed to tau
+- model selection semantics exposed to xi-agent
 
 ### Endpoint
 
-An **endpoint** is the concrete URL where tau reaches an API.
+An **endpoint** is the concrete URL where xi-agent reaches an API.
 
 Examples:
 
@@ -99,7 +99,7 @@ An endpoint is either:
 
 ### Provider preset
 
-A **provider preset** is tau's built-in definition of a recognized backend kind.
+A **provider preset** is xi-agent's built-in definition of a recognized backend kind.
 
 A provider preset defines:
 
@@ -128,7 +128,7 @@ Examples of provider presets:
 
 ### Provider instance
 
-A **provider instance** is one configured, selectable backend entry in tau.
+A **provider instance** is one configured, selectable backend entry in xi-agent.
 
 A provider instance contains:
 
@@ -153,12 +153,12 @@ Examples:
 
 A provider instance is either:
 
-- a **built-in instance**, synthesized by tau from a built-in preset
+- a **built-in instance**, synthesized by xi-agent from a built-in preset
 - a **custom instance**, created by the user from a preset that allows user configuration
 
 ## Backend classes
 
-Tau supports two backend classes.
+Xi-agent supports two backend classes.
 
 ### Built-in hosted providers
 
@@ -210,7 +210,7 @@ The preset identifies which provider the user is choosing.
 
 ### Service identity
 
-The preset identifies which backend product or software tau is speaking to.
+The preset identifies which backend product or software xi-agent is speaking to.
 
 ### API set
 
@@ -475,7 +475,7 @@ Semantics:
 - UI presence: built-in provider instance in the main provider picker
 
 Provider selection and API behavior are distinct for Copilot. The user selects
-Copilot as a provider instance, while tau applies backend-specific routing
+Copilot as a provider instance, while xi-agent applies backend-specific routing
 rules internally.
 
 ### Codex

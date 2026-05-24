@@ -197,7 +197,7 @@ async fn wait_for_callback(state: &str, cancel: Arc<AtomicBool>) -> anyhow::Resu
             log::debug!("codex oauth callback missing authorization code");
             ("400 Bad Request", "Missing authorization code")
         } else {
-            ("200 OK", "Authentication successful. Return to tau.")
+            ("200 OK", "Authentication successful. Return to xi-agent.")
         };
 
         let response = format!(

@@ -7,7 +7,7 @@ use std::{fs, path::PathBuf};
 /// The directory is removed on [`Drop`].
 ///
 /// # Directory selection
-/// 1. `$XDG_RUNTIME_DIR/tau/tool-output/{session_id}/`  (Linux, when set)
+/// 1. `$XDG_RUNTIME_DIR/xi/tool-output/{session_id}/`  (Linux, when set)
 /// 2. `{temp_dir}/xi-tool-output-{session_id}/`         (macOS, Windows, fallback)
 pub struct ToolOutputLog {
     dir: PathBuf,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     auth::AuthStore,
-    config::TauConfig,
+    config::XiConfig,
     llm::{
         LlmProvider,
         codex::{CodexProvider, DEFAULT_BASE_URL as CODEX_DEFAULT_BASE_URL},
@@ -17,7 +17,7 @@ use crate::{
 };
 
 const OPENROUTER_DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
-const OPENROUTER_REFERER: &str = "https://github.com/larsch/tau";
+const OPENROUTER_REFERER: &str = "https://github.com/larsch/xi-agent";
 const OPENROUTER_TITLE: &str = "xi";
 
 /// Return the context-window size (in tokens) for a known model name.
@@ -210,7 +210,7 @@ pub fn thinking_support_for_instance(instance: &ProviderInstance, model: &str) -
 pub fn build_provider_for_instance(
     instance: &ProviderInstance,
     thinking: ThinkingLevel,
-    _config: &TauConfig,
+    _config: &XiConfig,
 ) -> anyhow::Result<Arc<dyn LlmProvider + Send + Sync>> {
     let model = instance.effective_model();
 

@@ -243,7 +243,7 @@ async fn wait_for_callback(state: &str, cancel: Arc<AtomicBool>) -> anyhow::Resu
                 "Authentication failed: missing authorization code. You can close this window.",
             )
         } else {
-            ("200 OK", "Authentication successful. Return to tau.")
+            ("200 OK", "Authentication successful. Return to xi-agent.")
         };
 
         let response = format!(

@@ -28,7 +28,8 @@ pub struct SessionStore {
 
 impl SessionStore {
     pub fn open() -> anyhow::Result<Self> {
-        let dirs = project_dirs().context("Could not resolve platform data directory for tau")?;
+        let dirs =
+            project_dirs().context("Could not resolve platform data directory for xi-agent")?;
         let sessions_dir = dirs.data_dir().join("sessions");
         Self::open_at(sessions_dir)
     }
@@ -339,14 +340,14 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let store = SessionStore::open_at(tmp.path().to_path_buf()).expect("open store");
 
-        let cwd = "/home/larsch/prj/tau";
+        let cwd = "/home/larsch/prj/xi-agent";
         let path = store.session_file_path(cwd, "20260328T120000-deadbeef");
         let parent = path
             .parent()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str());
 
-        assert_eq!(parent, Some("%2Fhome%2Flarsch%2Fprj%2Ftau"));
+        assert_eq!(parent, Some("%2Fhome%2Flarsch%2Fprj%2Fxi-agent"));
     }
 
     #[test]

@@ -347,7 +347,7 @@ fn build_summary_prompt(
 
     vec![
         Message::system(
-            "You create compact, structured continuation summaries for tau coding sessions.",
+            "You create compact, structured continuation summaries for xi-agent coding sessions.",
         ),
         Message::user(prompt),
     ]

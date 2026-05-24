@@ -29,7 +29,7 @@ Run `just preflight` before every commit. It enforces:
 
 ## Issue and plan tracking
 
-Open work items are tracked as Gitea issues at https://gitea.belunktum.dk/larsch/tau/issues.
+Open work items are tracked as Gitea issues at https://gitea.belunktum.dk/larsch/xi-agent/issues.
 
 - Do not create local `docs/plans/` files for new work — create a Gitea issue instead (use the `gitea-cli` skill).
 - When planning non-trivial work, the Gitea issue body should capture scope, approach, success criteria, steps, risks, and verification approach.

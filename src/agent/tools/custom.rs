@@ -322,7 +322,7 @@ printf "got: $input"
 
     #[test]
     fn nonexistent_directory_returns_no_tools() {
-        let tools = load_custom_tools(&[PathBuf::from("/nonexistent/tau/tools")]);
+        let tools = load_custom_tools(&[PathBuf::from("/nonexistent/xi/tools")]);
         assert!(tools.is_empty());
     }
 

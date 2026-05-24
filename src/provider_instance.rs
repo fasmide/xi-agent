@@ -1,6 +1,6 @@
 // Items in this module form the public provider-instance API.
 
-/// API protocol/transport types that tau knows how to speak.
+/// API protocol/transport types that xi-agent knows how to speak.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApiType {
@@ -28,7 +28,7 @@ impl ApiType {
     }
 }
 
-/// Recognisable software / cloud services tau supports.
+/// Recognisable software / cloud services xi-agent supports.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackendPreset {
@@ -122,7 +122,7 @@ impl UrlNormalization {
     }
 }
 
-/// Metadata tau keeps about a backend preset.
+/// Metadata xi-agent keeps about a backend preset.
 pub struct BackendPresetDef {
     /// Machine-readable id (matches `BackendPreset` serialisation).
     pub id: &'static str,
@@ -135,7 +135,7 @@ pub struct BackendPresetDef {
     /// The recommended / default API type.
     pub default_api: ApiType,
     /// Whether the user should be allowed to choose the API type.
-    /// `false` means tau picks internally (e.g. Copilot).
+    /// `false` means xi-agent picks internally (e.g. Copilot).
     pub user_selects_api: bool,
     /// Whether the endpoint is predetermined, user-supplied, or overrideable.
     pub endpoint_behavior: EndpointBehavior,
@@ -357,7 +357,7 @@ impl BackendPreset {
 
 /// A named, user-configured provider instance.
 ///
-/// This is the primary unit tau uses for provider selection and dispatch.
+/// This is the primary unit xi-agent uses for provider selection and dispatch.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ProviderInstance {
     /// Stable identifier and user-visible name (e.g. "work-webui", "gpu-box").
@@ -366,7 +366,7 @@ pub struct ProviderInstance {
     /// The backend preset this instance connects to.
     #[serde(rename = "service_type", alias = "backend_preset")]
     pub backend_preset: BackendPreset,
-    /// The API protocol tau uses to talk to this instance.
+    /// The API protocol xi-agent uses to talk to this instance.
     pub api_type: ApiType,
     /// Base URL (required for self-hosted; absent for cloud services that have
     /// a fixed endpoint).

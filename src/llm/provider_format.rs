@@ -1,6 +1,6 @@
 //! Canonical per-protocol message serialization for LLM providers.
 //!
-//! Each function converts a slice of tau [`Message`]s into the wire format
+//! Each function converts a slice of xi-agent [`Message`]s into the wire format
 //! required by one protocol family.  All functions apply
 //! [`normalize_tool_name`] consistently so that emoji shorthand tool names
 //! are resolved before being sent to any provider.
@@ -179,7 +179,7 @@ pub fn to_openai_wire(messages: &[Message]) -> Vec<serde_json::Value> {
 
 // ── Anthropic Messages API ────────────────────────────────────────────────────
 
-/// Convert a tau `Message` history to the Anthropic Messages API wire format.
+/// Convert a xi-agent `Message` history to the Anthropic Messages API wire format.
 ///
 /// System messages are skipped here (they must be extracted separately and
 /// passed as the top-level `system` field in the request body).
@@ -294,7 +294,7 @@ pub fn to_anthropic_wire(messages: &[Message]) -> Vec<serde_json::Value> {
 
 // ── Google Gemini ─────────────────────────────────────────────────────────────
 
-/// Convert a tau `Message` history to the Gemini `contents` array wire format.
+/// Convert a xi-agent `Message` history to the Gemini `contents` array wire format.
 ///
 /// System messages are skipped (passed separately as `systemInstruction`).
 /// Tool calls use `functionCall` parts; tool results use `functionResponse`
@@ -380,7 +380,7 @@ pub fn to_gemini_wire(messages: &[Message]) -> Vec<serde_json::Value> {
 
 // ── OpenAI Responses API (Codex / GPT-5) ─────────────────────────────────────
 
-/// Convert a tau `Message` history to the OpenAI Responses API wire format.
+/// Convert a xi-agent `Message` history to the OpenAI Responses API wire format.
 ///
 /// System messages are skipped (passed as the `instructions` field).
 /// This format differs from Chat Completions: assistant messages use
@@ -446,7 +446,7 @@ pub fn to_codex_wire(messages: &[Message]) -> Vec<serde_json::Value> {
 
 // ── Ollama /api/chat ──────────────────────────────────────────────────────────
 
-/// Convert a tau `Message` history to the Ollama `/api/chat` wire format.
+/// Convert a xi-agent `Message` history to the Ollama `/api/chat` wire format.
 ///
 /// Ollama's format is OpenAI Chat Completions-like with two differences:
 /// - Assistant messages may carry a `thinking` field (chain-of-thought tokens

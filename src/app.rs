@@ -271,13 +271,6 @@ impl App {
         self.ask_user.freeform_mode
     }
 
-    pub fn ask_user_question(&self) -> Option<&str> {
-        self.ask_user
-            .pending
-            .as_ref()
-            .map(|pending| pending.question.as_str())
-    }
-
     pub fn queued_steering(&self) -> &[String] {
         self.runtime.queued_steering()
     }
@@ -1526,7 +1519,10 @@ mod tests {
             "freeform mode should be active"
         );
         assert!(app.has_pending_ask(), "pending ask should be set");
-        assert_eq!(app.ask_user_question(), Some("What is your name?"));
+        assert_eq!(
+            app.ask_user.pending.as_ref().map(|p| p.question.as_str()),
+            Some("What is your name?")
+        );
     }
 
     /// When ask_user has options and allow_freeform is true, the freeform

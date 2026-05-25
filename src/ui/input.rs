@@ -302,7 +302,7 @@ pub(super) fn render_input_panel(f: &mut ratatui::Frame, area: Rect, app: &App, 
             app.textarea.lines().to_vec(),
             app.textarea.cursor(),
             String::new(),
-            app.ask_user_question().map(str::to_owned),
+            None,
         )
     };
 

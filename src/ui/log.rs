@@ -201,10 +201,10 @@ fn render_tool_call(
             append_ask_user_block_dim(out, ctx, width, ASK_USER_BG);
         }
 
-        // Question: green bg, normal text, ❓ icon.
+        // Question: no background (same as normal agent responses).
         if !question.is_empty() {
             let md_lines = crate::markdown::render(question, width, "❓ ");
-            append_ask_user_block_normal(out, md_lines, width, ASK_USER_BG);
+            append_markdown_answer(out, md_lines, false);
         }
 
         // Response is rendered in render_tool_result; nothing more here.
@@ -677,30 +677,6 @@ fn append_ask_user_block_dim(out: &mut Vec<Line<'static>>, content: &str, width:
         let mut spans = dimmed;
         if padding > 0 {
             spans.push(Span::styled(" ".repeat(padding), padding_style));
-        }
-        out.push(Line::from(spans));
-    }
-}
-
-/// Question block: green background, normal text, icon already in md prefix.
-fn append_ask_user_block_normal(
-    out: &mut Vec<Line<'static>>,
-    md_lines: Vec<Line<'static>>,
-    width: usize,
-    bg: Color,
-) {
-    let bg_style = Style::default().bg(bg);
-    for line in md_lines {
-        let colored: Vec<Span<'static>> = line
-            .spans
-            .into_iter()
-            .map(|s| Span::styled(s.content, bg_style.patch(s.style)))
-            .collect();
-        let text_width: usize = colored.iter().map(|s| s.content.width()).sum();
-        let padding = width.saturating_sub(text_width);
-        let mut spans = colored;
-        if padding > 0 {
-            spans.push(Span::styled(" ".repeat(padding), bg_style));
         }
         out.push(Line::from(spans));
     }

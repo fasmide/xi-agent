@@ -7,12 +7,28 @@
 interactions with local and remote models, supporting tool calls, session
 persistence, and interactive authentication.
 
-* Supported providers: built-in hosted providers plus configured named provider instances
+* Supported APIs: OpenAI (chat + Responses), Anthropic-compatible, Gemini native, Ollama chat
 * Built-in tools: read_file, write_file, edit_file, find_files, ask_user, exec, python, bash/cmd/powershell
 * Standard `AGENTS.md` support
 * Standard `SKILL.md` support (see below)
 * Custom tools: define your own tools (see below)
 * Caveats: **No safety guarantees** around tool calls; use with caution
+
+## Providers
+
+| Provider | Type | Auth |
+|---|---|---|
+| **GitHub Copilot** | Cloud — managed model routing | `/login copilot` |
+| **OpenAI API** | Cloud — OpenAI models | `OPENAI_API_KEY` |
+| **OpenAI Codex** (chatgpt.com) | Cloud — OpenAI Codex | `/login codex` |
+| **OpenRouter** | Cloud — multi-model gateway | API key in config |
+| **Google Gemini** (Cloud Code Assist) | Cloud — Gemini models | `/login gemini` |
+| **Ollama** | Self-hosted | none |
+| **ollama.com** | Cloud — Ollama-hosted models | API key in config |
+| **Open WebUI** | Self-hosted | API key in config |
+| **OpenAI-compatible endpoint** | Any OpenAI-compatible API | API key in config |
+
+Configure named provider instances in `~/.xi/config.toml` and select them with `-P <name>` or `/provider <name>`.
 
 ## License
 

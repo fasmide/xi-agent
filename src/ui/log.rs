@@ -377,7 +377,7 @@ fn render_tool_result(
     // ask_user: response is committed as part of the ToolCall rendering above.
     // Here we just append the response block (green bg, italic).
     if prev_name == "ask_user" {
-        append_ask_user_response(out, &msg.content, width, ASK_USER_BG);
+        append_ask_user_response(out, &msg.content, width, USER_BG);
         return;
     }
 
@@ -706,25 +706,47 @@ fn append_ask_user_block_normal(
     }
 }
 
-/// Response block: green background, italic text.
+/// Response block: rendered like a normal user message but with the ask_user background color.
 fn append_ask_user_response(out: &mut Vec<Line<'static>>, content: &str, width: usize, bg: Color) {
-    let bg_italic_style = Style::default().bg(bg).add_modifier(Modifier::ITALIC);
     let bg_style = Style::default().bg(bg);
     let sanitized = sanitize_for_display(content);
-    let segments: Vec<&str> = sanitized.split('\n').collect();
-    for seg in &segments {
-        if seg.is_empty() {
-            continue;
-        }
-        let chunks = wrap_str(seg, width);
+    let segments: Vec<&str> = if sanitized.is_empty() {
+        vec![""]
+    } else {
+        sanitized.split('\n').collect()
+    };
+    let visible: Vec<usize> = if sanitized.is_empty() {
+        vec![0]
+    } else {
+        segments
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, seg)| {
+                let has_nonempty_after = segments.iter().skip(idx + 1).any(|s| !s.is_empty());
+                if seg.is_empty() && !has_nonempty_after {
+                    None
+                } else {
+                    Some(idx)
+                }
+            })
+            .collect()
+    };
+
+    out.push(halfblock_line(width, '▄', bg));
+
+    for seg_idx in visible {
+        let segment = segments[seg_idx];
+        let normalized = normalize_terminal_segment(segment, 0);
+        let chunks = wrap_str(&normalized, width);
         for chunk in chunks {
             let text_cols = chunk.as_str().width();
             let padding = width.saturating_sub(text_cols);
-            let padded = format!("{chunk}{}", " ".repeat(padding));
-            out.push(Line::from(Span::styled(padded, bg_italic_style)));
+            let padded = format!("{}{}", chunk, " ".repeat(padding));
+            out.push(Line::from(Span::styled(padded, bg_style)));
         }
     }
-    let _ = bg_style;
+
+    out.push(halfblock_line(width, '▀', bg));
 }
 
 // ── Shared rendering primitives ───────────────────────────────────────────────

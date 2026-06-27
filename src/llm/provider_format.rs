@@ -31,6 +31,19 @@
 use super::common::normalize_tool_name;
 use super::{ImageData, Message, Role};
 
+// ── Shared helpers ─────────────────────────────────────────────────────────────
+
+/// Return the tool args as a JSON object, falling back to `{}` when absent or
+/// null.  Anthropic's API requires `input` to be a valid dictionary; a `null`
+/// value (which can occur when the LLM emits a tool call with no arguments, or
+/// when an old session file stores `"args": null`) causes a 400 error.
+fn tool_args_object(msg: &Message) -> serde_json::Value {
+    match &msg.tool_args {
+        Some(v) if v.is_object() => v.clone(),
+        _ => serde_json::json!({}),
+    }
+}
+
 // ── Shared traversal ──────────────────────────────────────────────────────────
 
 /// One logical conversation unit produced by [`group_messages`].
@@ -295,7 +308,7 @@ pub fn to_anthropic_wire(messages: &[Message]) -> Vec<serde_json::Value> {
                         "type": "tool_use",
                         "id": tc.tool_call_id.as_deref().unwrap_or("call_0"),
                         "name": normalize_tool_name(tc.tool_name.as_deref().unwrap_or("")),
-                        "input": tc.tool_args.clone().unwrap_or_default(),
+                        "input": tool_args_object(tc),
                     }));
                     if let Some(tr) = tr_opt {
                         let tr_content = anthropic_tool_result_content(tr);
@@ -331,7 +344,7 @@ pub fn to_anthropic_wire(messages: &[Message]) -> Vec<serde_json::Value> {
                         "type": "tool_use",
                         "id": tc.tool_call_id.as_deref().unwrap_or("call_0"),
                         "name": normalize_tool_name(tc.tool_name.as_deref().unwrap_or("")),
-                        "input": tc.tool_args.clone().unwrap_or_default(),
+                        "input": tool_args_object(tc),
                     }],
                 }));
             }
@@ -715,6 +728,49 @@ mod tests {
         assert_eq!(wire.len(), 2);
         assert_eq!(wire[1]["role"], "user");
         assert_eq!(wire[1]["content"][0]["type"], "tool_result");
+    }
+
+    #[test]
+    fn anthropic_wire_null_tool_args_become_empty_object() {
+        // When the LLM emits a tool call with null args (a known model quirk),
+        // the Anthropic wire format must still emit an object for `input`, not
+        // null — Anthropic's API rejects null with a 400.
+        // Case 1: tool_args is None
+        let mut tc = Message::tool_call("id-1", "exec", serde_json::json!({}));
+        tc.tool_args = None;
+        let messages = vec![
+            Message::assistant(""),
+            tc,
+            Message::tool_result("id-1", "err", true),
+        ];
+        let wire = to_anthropic_wire(&messages);
+        assert!(wire[0]["content"][0]["input"].is_object());
+
+        // Case 2: tool_args is Some(Value::Null) — from "args": null in session file
+        let mut tc2 = Message::tool_call("id-2", "exec", serde_json::json!({}));
+        tc2.tool_args = Some(serde_json::Value::Null);
+        let messages2 = vec![
+            Message::assistant(""),
+            tc2,
+            Message::tool_result("id-2", "err", true),
+        ];
+        let wire2 = to_anthropic_wire(&messages2);
+        assert!(wire2[0]["content"][0]["input"].is_object());
+    }
+
+    #[test]
+    fn anthropic_wire_standalone_null_tool_args_become_empty_object() {
+        // Case 1: None
+        let mut tc = Message::tool_call("id-1", "exec", serde_json::json!({}));
+        tc.tool_args = None;
+        let wire = to_anthropic_wire(&[tc]);
+        assert!(wire[0]["content"][0]["input"].is_object());
+
+        // Case 2: Some(Value::Null)
+        let mut tc2 = Message::tool_call("id-2", "exec", serde_json::json!({}));
+        tc2.tool_args = Some(serde_json::Value::Null);
+        let wire2 = to_anthropic_wire(&[tc2]);
+        assert!(wire2[0]["content"][0]["input"].is_object());
     }
 
     // ── to_gemini_wire ────────────────────────────────────────────────────────

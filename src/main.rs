@@ -23,6 +23,8 @@ mod agent;
 mod agent_runtime;
 mod at_file;
 
+mod atomic_file;
+
 mod agent_turn_state;
 mod app;
 mod app_agent_handlers;
@@ -912,7 +914,11 @@ async fn preflight_token_refresh(provider: &str) -> bool {
     match state {
         auth::AuthTokenState::Expired | auth::AuthTokenState::ExpiringSoon => {
             log::debug!("preflight: token {state:?}, refreshing before request");
-            match auth::refresh_token(provider).await {
+            let refresh_result = match auth::real_backend_for(provider) {
+                Ok(backend) => auth::refresh_token(provider, backend).await,
+                Err(e) => Err(e),
+            };
+            match refresh_result {
                 Ok(()) => {
                     log::debug!("preflight: token refreshed successfully");
                     true
@@ -1088,7 +1094,11 @@ async fn run_print_mode_loop(
                     && provider_supports_token_refresh(ctx.name)
                 {
                     log::debug!("received 401 in print mode, attempting token refresh");
-                    match auth::refresh_token(ctx.name).await {
+                    let refresh_result = match auth::real_backend_for(ctx.name) {
+                        Ok(backend) => auth::refresh_token(ctx.name, backend).await,
+                        Err(e) => Err(e),
+                    };
+                    match refresh_result {
                         Ok(()) => {
                             log::debug!(
                                 "reactive refresh succeeded, rebuilding provider and retrying"

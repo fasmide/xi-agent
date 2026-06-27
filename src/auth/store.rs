@@ -1,6 +1,5 @@
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -20,9 +19,14 @@ impl AuthStore {
         Self::load(path)
     }
 
+    /// Threshold for detecting `expires_at` values stored in milliseconds
+    /// instead of seconds. Any value above this is assumed to be millisecond-
+    /// epoch and gets divided by 1000.
+    const MS_THRESHOLD: i64 = 999_999_999_999;
+
     pub fn load(path: impl Into<PathBuf>) -> anyhow::Result<Self> {
         let path = path.into();
-        let data = if path.exists() {
+        let mut data = if path.exists() {
             let text = fs::read_to_string(&path)
                 .map_err(|e| anyhow::anyhow!("Cannot read {}: {}", path.display(), e))?;
             toml::from_str::<AuthFile>(&text)
@@ -30,6 +34,12 @@ impl AuthStore {
         } else {
             AuthFile::default()
         };
+
+        // Migration: pre-v2 auth files stored `expires_at` in milliseconds.
+        // Detect and fix any values that still use the old unit.
+        for creds in data.providers.values_mut() {
+            creds.migrate_expires_at_ms_to_secs(Self::MS_THRESHOLD);
+        }
 
         Ok(Self { path, data })
     }
@@ -121,46 +131,65 @@ impl AuthStore {
         );
     }
 
+    /// Store credentials from a [`ProviderCredentials`] value returned by a
+    /// backend, routing to the correct typed setter by variant.
+    pub fn set_from_credentials(&mut self, creds: ProviderCredentials) {
+        match creds {
+            ProviderCredentials::Copilot {
+                access_token,
+                refresh_token,
+                expires_at,
+                base_url,
+            } => self.set_copilot(CopilotCredentials {
+                access_token,
+                refresh_token,
+                expires_at,
+                base_url,
+            }),
+            ProviderCredentials::Codex {
+                access_token,
+                refresh_token,
+                expires_at,
+                account_id,
+            } => self.set_codex(CodexCredentials {
+                access_token,
+                refresh_token,
+                expires_at,
+                account_id,
+            }),
+            ProviderCredentials::Gemini {
+                access_token,
+                refresh_token,
+                expires_at,
+                project_id,
+            } => self.set_gemini(GeminiCredentials {
+                access_token,
+                refresh_token,
+                expires_at,
+                project_id,
+            }),
+        }
+    }
+
+    /// Return the stored refresh token for `provider`, or `None` if absent.
+    pub fn get_refresh_token(&self, provider: &str) -> Option<String> {
+        match provider {
+            "copilot" => self.get_copilot().map(|c| c.refresh_token),
+            "codex" => self.get_codex().map(|c| c.refresh_token),
+            "gemini" => self.get_gemini().map(|c| c.refresh_token),
+            _ => None,
+        }
+    }
+
     pub fn save(&self) -> anyhow::Result<()> {
         save_atomic(&self.path, &self.data)
     }
 }
 
 fn save_atomic(path: &Path, data: &AuthFile) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", parent.display(), e))?;
-    }
-
     let serialized = toml::to_string_pretty(data)
         .map_err(|e| anyhow::anyhow!("Cannot serialize auth file: {}", e))?;
-
-    let tmp_path = path.with_extension(format!("toml.tmp.{}", std::process::id()));
-    {
-        let mut file = fs::File::create(&tmp_path)
-            .map_err(|e| anyhow::anyhow!("Cannot create {}: {}", tmp_path.display(), e))?;
-        file.write_all(serialized.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Cannot write {}: {}", tmp_path.display(), e))?;
-        file.sync_all()
-            .map_err(|e| anyhow::anyhow!("Cannot sync {}: {}", tmp_path.display(), e))?;
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600));
-    }
-
-    fs::rename(&tmp_path, path).map_err(|e| {
-        anyhow::anyhow!(
-            "Cannot rename {} to {}: {}",
-            tmp_path.display(),
-            path.display(),
-            e
-        )
-    })?;
-
-    Ok(())
+    crate::atomic_file::save_atomic(path, &serialized)
 }
 
 #[cfg(test)]
@@ -301,5 +330,32 @@ mod tests {
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "file should be owner-read/write only");
+    }
+
+    // ── Atomic save failure injection ─────────────────────────────────────────
+
+    use crate::atomic_file;
+
+    #[test]
+    fn save_atomic_fails_when_parent_is_a_file() {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("not-a-dir");
+        // Create a file where a directory would be expected.
+        std::fs::write(&file_path, "content").unwrap();
+        let path = file_path.join("auth.toml");
+
+        // `create_dir_all` will fail because the parent is a file.
+        let result = atomic_file::save_atomic(&path, "test content");
+        assert!(result.is_err(), "save_atomic should fail when parent is a file");
+    }
+
+    #[test]
+    fn save_atomic_writes_and_reads_back() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.toml");
+
+        assert!(atomic_file::save_atomic(&path, "hello world").is_ok());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "hello world");
     }
 }

@@ -50,6 +50,22 @@ pub enum ProviderCredentials {
     },
 }
 
+impl ProviderCredentials {
+    /// If `expires_at` exceeds `ms_threshold`, it was stored in milliseconds
+    /// (pre-v2 format). Divide by 1000 to convert to seconds.
+    pub fn migrate_expires_at_ms_to_secs(&mut self, ms_threshold: i64) {
+        match self {
+            Self::Copilot { expires_at, .. }
+            | Self::Codex { expires_at, .. }
+            | Self::Gemini { expires_at, .. } => {
+                if *expires_at > ms_threshold {
+                    *expires_at /= 1000;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CopilotCredentials {
     pub access_token: String,

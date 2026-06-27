@@ -5,14 +5,18 @@ use std::sync::{
 
 use crate::app_event::{AppEvent, AppEventTx};
 
+pub mod backend;
 pub mod codex;
 pub mod copilot;
 pub mod gemini;
+#[cfg(test)]
+pub mod mock;
 pub mod open_url;
 pub mod paths;
 pub mod store;
 pub mod types;
 
+pub use backend::{OAuthBackend, real_backend_for};
 pub use store::AuthStore;
 
 /// Describes what the user needs to do after receiving an [`LoginEvent::AuthCode`].
@@ -51,92 +55,41 @@ pub enum LoginEvent {
     Finished,
 }
 
-pub async fn login_provider(provider: &str, tx: AppEventTx, cancel: Arc<AtomicBool>) {
+/// Run the login flow for `provider` using the supplied `backend`.
+///
+/// Emits [`LoginEvent`]s on `tx` throughout the flow and persists credentials
+/// to the default auth store on success.
+///
+/// `backend` is injected so tests can substitute a mock without any real HTTP.
+/// In production, callers build the backend with [`real_backend_for`].
+pub async fn login_provider(
+    provider: &str,
+    tx: AppEventTx,
+    cancel: Arc<AtomicBool>,
+    backend: Arc<dyn OAuthBackend>,
+) {
     log::debug!("login_provider called: provider={provider}");
     let _ = tx.send(AppEvent::Login(LoginEvent::Info(format!(
         "Starting login for {provider}..."
     ))));
 
-    let result = match provider {
-        "copilot" => {
-            let creds = copilot::login(
-                |ev| match ev {
-                    copilot::CopilotLoginEvent::DeviceCode {
-                        verification_uri,
-                        user_code,
-                    } => {
-                        let _ = tx.send(AppEvent::Login(LoginEvent::AuthCode {
-                            url: verification_uri,
-                            code: Some(user_code),
-                            flow: AuthFlow::DeviceCode,
-                        }));
-                    }
-                    copilot::CopilotLoginEvent::Progress(msg) => {
-                        let _ = tx.send(AppEvent::Login(LoginEvent::Info(msg)));
-                    }
-                },
-                cancel.clone(),
-            )
-            .await;
+    // Forward all backend LoginEvents directly onto the app event channel.
+    let tx_ev = tx.clone();
+    let login_result = backend
+        .login(
+            Box::new(move |ev| {
+                let _ = tx_ev.send(AppEvent::Login(ev));
+            }),
+            cancel.clone(),
+        )
+        .await;
 
-            creds.map(|creds| {
-                let mut store = AuthStore::load_default()?;
-                store.set_copilot(creds);
-                store.save()
-            })
-        }
-        "codex" => {
-            let creds = codex::login(
-                |ev| match ev {
-                    codex::CodexLoginEvent::OpenBrowser(url) => {
-                        let _ = tx.send(AppEvent::Login(LoginEvent::AuthCode {
-                            url,
-                            code: None,
-                            flow: AuthFlow::RedirectCallback,
-                        }));
-                    }
-                    codex::CodexLoginEvent::Progress(msg) => {
-                        let _ = tx.send(AppEvent::Login(LoginEvent::Info(msg)));
-                    }
-                },
-                cancel.clone(),
-            )
-            .await;
-
-            creds.map(|creds| {
-                let mut store = AuthStore::load_default()?;
-                store.set_codex(creds);
-                store.save()
-            })
-        }
-        "gemini" => {
-            let creds = gemini::login(
-                |ev| match ev {
-                    gemini::GeminiLoginEvent::OpenBrowser(url) => {
-                        let _ = tx.send(AppEvent::Login(LoginEvent::AuthCode {
-                            url,
-                            code: None,
-                            flow: AuthFlow::RedirectCallback,
-                        }));
-                    }
-                    gemini::GeminiLoginEvent::Progress(msg) => {
-                        let _ = tx.send(AppEvent::Login(LoginEvent::Info(msg)));
-                    }
-                },
-                cancel.clone(),
-            )
-            .await;
-
-            creds.map(|creds| {
-                let mut store = AuthStore::load_default()?;
-                store.set_gemini(creds);
-                store.save()
-            })
-        }
-        _ => Err(anyhow::anyhow!(
-            "Unsupported provider for /login: {provider}"
-        )),
-    };
+    // On success, persist the returned ProviderCredentials to the store.
+    let result = login_result.map(|creds| {
+        let mut store = AuthStore::load_default()?;
+        store.set_from_credentials(creds);
+        store.save()
+    });
 
     match result {
         Ok(Ok(())) => {
@@ -162,46 +115,25 @@ pub async fn login_provider(provider: &str, tx: AppEventTx, cancel: Arc<AtomicBo
     let _ = tx.send(AppEvent::Login(LoginEvent::Finished));
 }
 
-/// Refresh the stored OAuth token for `provider` and persist the result.
+/// Refresh the stored OAuth token for `provider` using the supplied `backend`.
 ///
-/// This is the single implementation of token renewal. It performs the HTTP
-/// refresh, updates the auth store on disk, and returns `Ok(())` on success.
+/// Loads the stored refresh token, calls `backend.refresh()`, and persists
+/// the updated credentials. Returns `Ok(())` on success.
 ///
-/// Supported providers: `"copilot"`, `"codex"`, `"gemini"`.
-pub async fn refresh_token(provider: &str) -> anyhow::Result<()> {
+/// `backend` is injected so tests can substitute a mock. In production,
+/// callers build the backend with [`real_backend_for`].
+pub async fn refresh_token(
+    provider: &str,
+    backend: Arc<dyn OAuthBackend>,
+) -> anyhow::Result<()> {
     log::debug!("refresh_token called: provider={provider}");
-    match provider {
-        "copilot" => {
-            let mut store = AuthStore::load_default()?;
-            let creds = store
-                .get_copilot()
-                .ok_or_else(|| anyhow::anyhow!("No stored credentials"))?;
-            let refreshed = copilot::refresh(&creds.refresh_token).await?;
-            store.set_copilot(refreshed);
-            store.save()
-        }
-        "codex" => {
-            let mut store = AuthStore::load_default()?;
-            let creds = store
-                .get_codex()
-                .ok_or_else(|| anyhow::anyhow!("No stored credentials"))?;
-            let refreshed = codex::refresh(&creds.refresh_token).await?;
-            store.set_codex(refreshed);
-            store.save()
-        }
-        "gemini" => {
-            let mut store = AuthStore::load_default()?;
-            let creds = store
-                .get_gemini()
-                .ok_or_else(|| anyhow::anyhow!("No stored credentials"))?;
-            let refreshed = gemini::refresh(&creds.refresh_token, &creds.project_id).await?;
-            store.set_gemini(refreshed);
-            store.save()
-        }
-        _ => Err(anyhow::anyhow!(
-            "Refresh not supported for provider {provider}"
-        )),
-    }
+    let mut store = AuthStore::load_default()?;
+    let refresh_tok = store
+        .get_refresh_token(provider)
+        .ok_or_else(|| anyhow::anyhow!("No stored credentials for {provider}"))?;
+    let refreshed = backend.refresh(&refresh_tok).await?;
+    store.set_from_credentials(refreshed);
+    store.save()
 }
 
 /// Refresh the stored token for `provider` and report the outcome on `tx`.
@@ -209,7 +141,18 @@ pub async fn refresh_token(provider: &str) -> anyhow::Result<()> {
 /// This is a thin wrapper around [`refresh_token`] for use by the interactive
 /// TUI, which communicates refresh results via a unified [`AppEvent`] channel.
 pub async fn refresh_provider(provider: &str, tx: AppEventTx) {
-    let result = refresh_token(provider).await;
+    let backend = match real_backend_for(provider) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = tx.send(AppEvent::Login(LoginEvent::RefreshResult {
+                provider: provider.to_string(),
+                success: false,
+                message: e.to_string(),
+            }));
+            return;
+        }
+    };
+    let result = refresh_token(provider, backend).await;
     match result {
         Ok(()) => {
             let _ = tx.send(AppEvent::Login(LoginEvent::RefreshResult {
@@ -250,20 +193,15 @@ pub enum AuthTokenState {
 
 /// Check the expiration state of the stored token for the given provider.
 ///
-/// Returns `Missing` if no credentials exist, otherwise classifies the token
-/// based on `expires_at` relative to `now_secs` with a `leeway_secs` buffer.
-///
-/// # Arguments
-/// - `provider`: Provider name ("copilot", "codex", "gemini")
-/// - `now_secs`: Current time as Unix epoch seconds
-/// - `leeway_secs`: Seconds before expiry to consider the token "expiring soon"
-pub fn token_state(
+/// Equivalent to [`token_state`] but takes an explicit [`AuthStore`]
+/// reference instead of loading the default one. Useful in tests where the
+/// store is controlled.
+pub fn token_state_from_store(
+    store: &AuthStore,
     provider: &str,
     now_secs: i64,
     leeway_secs: i64,
 ) -> anyhow::Result<AuthTokenState> {
-    let store = AuthStore::load_default()?;
-
     let expires_at = match provider {
         "copilot" => store.get_copilot().map(|c| c.expires_at),
         "codex" => store.get_codex().map(|c| c.expires_at),
@@ -282,6 +220,24 @@ pub fn token_state(
     } else {
         Ok(AuthTokenState::Valid)
     }
+}
+
+/// Check the expiration state of the stored token for the given provider.
+///
+/// Returns `Missing` if no credentials exist, otherwise classifies the token
+/// based on `expires_at` relative to `now_secs` with a `leeway_secs` buffer.
+///
+/// # Arguments
+/// - `provider`: Provider name ("copilot", "codex", "gemini")
+/// - `now_secs`: Current time as Unix epoch seconds
+/// - `leeway_secs`: Seconds before expiry to consider the token "expiring soon"
+pub fn token_state(
+    provider: &str,
+    now_secs: i64,
+    leeway_secs: i64,
+) -> anyhow::Result<AuthTokenState> {
+    let store = AuthStore::load_default()?;
+    token_state_from_store(&store, provider, now_secs, leeway_secs)
 }
 
 #[cfg(test)]
@@ -343,5 +299,312 @@ mod tests {
         } else {
             AuthTokenState::Valid
         }
+    }
+
+    // ── login_provider orchestration tests ────────────────────────────────────
+
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use crate::app_event::AppEvent;
+    use crate::auth::mock::{MockOAuthBackend, fake_copilot_creds};
+    use tempfile::TempDir;
+    use crate::auth::store::AuthStore;
+    use crate::auth::types::ProviderCredentials;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    /// Override the auth file path for the duration of a test.
+    struct AuthPathOverride {
+        _tmp: TempDir,
+    }
+
+    impl AuthPathOverride {
+        fn new() -> Self {
+            let tmp = TempDir::new().unwrap();
+            let path = tmp.path().join("auth.toml");
+            // SAFETY: single-threaded test, no concurrent env access.
+            unsafe { std::env::set_var("XI_AUTH_FILE", path.to_str().unwrap()); }
+            Self { _tmp: tmp }
+        }
+    }
+
+    impl Drop for AuthPathOverride {
+        fn drop(&mut self) {
+            // SAFETY: single-threaded test, no concurrent env access.
+            unsafe { std::env::remove_var("XI_AUTH_FILE"); }
+        }
+    }
+
+    #[tokio::test]
+    async fn login_provider_success_emits_event_sequence() {
+        let _override = AuthPathOverride::new();
+        let mock = Arc::new(
+            MockOAuthBackend::new()
+                .expect_login(Ok(fake_copilot_creds())),
+        );
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        login_provider("copilot", tx, cancel, mock).await;
+
+        // Drain events
+        let events: Vec<LoginEvent> = std::iter::from_fn(|| {
+            rx.try_recv().ok().map(|e| match e {
+                AppEvent::Login(ev) => ev,
+                _ => unreachable!(),
+            })
+        })
+        .collect();
+
+        assert!(
+            events.iter().any(|e| matches!(e, LoginEvent::Info(m) if m.contains("Starting login"))),
+            "expected Info event"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, LoginEvent::AuthCode { .. })),
+            "expected AuthCode event"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, LoginEvent::Success { provider } if provider == "copilot")),
+            "expected Success event"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, LoginEvent::Finished)),
+            "expected Finished event"
+        );
+
+        // Verify credentials were persisted
+        let store = AuthStore::load_default().unwrap();
+        assert!(store.get_copilot().is_some(), "credentials should be persisted");
+    }
+
+    #[tokio::test]
+    async fn login_provider_error_emits_error_event() {
+        let _override = AuthPathOverride::new();
+        let mock = Arc::new(
+            MockOAuthBackend::new()
+                .expect_login(Err(anyhow::anyhow!("provider rejected"))),
+        );
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        login_provider("copilot", tx, cancel, mock).await;
+
+        let events: Vec<LoginEvent> = std::iter::from_fn(|| {
+            rx.try_recv().ok().map(|e| match e {
+                AppEvent::Login(ev) => ev,
+                _ => unreachable!(),
+            })
+        })
+        .collect();
+
+        assert!(
+            events.iter().any(|e| matches!(e, LoginEvent::Error { message, .. } if message == "provider rejected")),
+            "expected Error event with message"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, LoginEvent::Finished)),
+            "expected Finished event"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_provider_cancelled_emits_cancelled_error() {
+        let _override = AuthPathOverride::new();
+        let mock = Arc::new(
+            MockOAuthBackend::new()
+                .expect_login(Err(anyhow::anyhow!("Login cancelled"))),
+        );
+
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let cancel = Arc::new(AtomicBool::new(true)); // already cancelled
+
+        login_provider("copilot", tx, cancel, mock).await;
+
+        let events: Vec<LoginEvent> = std::iter::from_fn(|| {
+            rx.try_recv().ok().map(|e| match e {
+                AppEvent::Login(ev) => ev,
+                _ => unreachable!(),
+            })
+        })
+        .collect();
+
+        assert!(
+            events.iter().any(|e| matches!(e, LoginEvent::Error { message, .. } if message == "Login cancelled")),
+            "expected cancelled error"
+        );
+    }
+
+    // ── token_state regression tests against real AuthStore ────────────────────
+
+    #[test]
+    fn token_state_with_real_store_expired() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+        let mut store = AuthStore::load(&path).unwrap();
+        store.set_from_credentials(ProviderCredentials::Copilot {
+            access_token: "tok".to_string(),
+            refresh_token: "ref".to_string(),
+            expires_at: 900,
+            base_url: None,
+        });
+        store.save().unwrap();
+
+        let state = token_state_from_store(&store, "copilot", 1000, 120).unwrap();
+        assert_eq!(state, AuthTokenState::Expired);
+    }
+
+    #[test]
+    fn token_state_with_real_store_expiring_soon() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+        let mut store = AuthStore::load(&path).unwrap();
+        store.set_from_credentials(ProviderCredentials::Copilot {
+            access_token: "tok".to_string(),
+            refresh_token: "ref".to_string(),
+            expires_at: 1100,
+            base_url: None,
+        });
+        store.save().unwrap();
+
+        let state = token_state_from_store(&store, "copilot", 1000, 120).unwrap();
+        assert_eq!(state, AuthTokenState::ExpiringSoon);
+    }
+
+    #[test]
+    fn token_state_with_real_store_valid() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+        let mut store = AuthStore::load(&path).unwrap();
+        store.set_from_credentials(ProviderCredentials::Copilot {
+            access_token: "tok".to_string(),
+            refresh_token: "ref".to_string(),
+            expires_at: 2000,
+            base_url: None,
+        });
+        store.save().unwrap();
+
+        let state = token_state_from_store(&store, "copilot", 1000, 120).unwrap();
+        assert_eq!(state, AuthTokenState::Valid);
+    }
+
+    #[test]
+    fn token_state_with_real_store_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+        let store = AuthStore::load(&path).unwrap();
+        // No credentials written — store is empty.
+
+        let state = token_state_from_store(&store, "copilot", 1000, 120).unwrap();
+        assert_eq!(state, AuthTokenState::Missing);
+    }
+
+    // ── Store helper tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn set_from_credentials_copilot_round_trips() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+        let mut store = AuthStore::load(&path).unwrap();
+        store.set_from_credentials(ProviderCredentials::Copilot {
+            access_token: "a1".to_string(),
+            refresh_token: "r1".to_string(),
+            expires_at: 1000,
+            base_url: Some("https://example.com".to_string()),
+        });
+        store.save().unwrap();
+
+        let loaded = AuthStore::load(&path).unwrap();
+        let creds = loaded.get_copilot().unwrap();
+        assert_eq!(creds.access_token, "a1");
+        assert_eq!(creds.refresh_token, "r1");
+        assert_eq!(creds.expires_at, 1000);
+        assert_eq!(creds.base_url.as_deref(), Some("https://example.com"));
+    }
+
+    #[test]
+    fn get_refresh_token_returns_token_for_known_providers() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+        let mut store = AuthStore::load(&path).unwrap();
+        store.set_from_credentials(ProviderCredentials::Copilot {
+            access_token: "at".to_string(),
+            refresh_token: "rt_cop".to_string(),
+            expires_at: 9999,
+            base_url: None,
+        });
+        store.set_from_credentials(ProviderCredentials::Codex {
+            access_token: "at".to_string(),
+            refresh_token: "rt_cod".to_string(),
+            expires_at: 9999,
+            account_id: "acct".to_string(),
+        });
+
+        assert_eq!(
+            store.get_refresh_token("copilot").as_deref(),
+            Some("rt_cop")
+        );
+        assert_eq!(
+            store.get_refresh_token("codex").as_deref(),
+            Some("rt_cod")
+        );
+        assert_eq!(store.get_refresh_token("unknown"), None);
+    }
+
+    // ── Migration guard tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn expires_at_ms_in_loaded_file_is_migrated_to_seconds() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+
+        // Write a file with expires_at in milliseconds (pre-v2 format)
+        let ms_value: i64 = 1_750_000_000_000; // ~2025 in ms
+        let toml = format!(
+            r#"
+version = 1
+
+[providers.copilot]
+kind = "copilot"
+access_token = "tok"
+refresh_token = "ref"
+expires_at = {}
+"#,
+            ms_value
+        );
+        std::fs::write(&path, &toml).unwrap();
+
+        let store = AuthStore::load(&path).unwrap();
+        let creds = store.get_copilot().unwrap();
+        // Should have been divided by 1000
+        assert_eq!(creds.expires_at, ms_value / 1000);
+    }
+
+    #[test]
+    fn expires_at_seconds_unchanged_by_migration() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+
+        // Write a file with expires_at already in seconds (post-fix format)
+        let secs_value: i64 = 1_750_000_000;
+        let toml = format!(
+            r#"
+version = 1
+
+[providers.copilot]
+kind = "copilot"
+access_token = "tok"
+refresh_token = "ref"
+expires_at = {}
+"#,
+            secs_value
+        );
+        std::fs::write(&path, &toml).unwrap();
+
+        let store = AuthStore::load(&path).unwrap();
+        let creds = store.get_copilot().unwrap();
+        // Should remain unchanged
+        assert_eq!(creds.expires_at, secs_value);
     }
 }

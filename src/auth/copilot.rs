@@ -50,13 +50,22 @@ fn cancelled(cancel: &Arc<AtomicBool>) -> bool {
 pub async fn login(
     on_event: impl Fn(CopilotLoginEvent),
     cancel: Arc<AtomicBool>,
+    device_code_url_override: Option<&str>,
+    access_token_url_override: Option<&str>,
+    copilot_token_url_override: Option<&str>,
 ) -> anyhow::Result<CopilotCredentials> {
     let client = reqwest::Client::new();
+    let device_code_url = device_code_url_override
+        .unwrap_or("https://github.com/login/device/code");
+    let access_token_url = access_token_url_override
+        .unwrap_or("https://github.com/login/oauth/access_token");
+    let copilot_token_url = copilot_token_url_override
+        .unwrap_or("https://api.github.com/copilot_internal/v2/token");
 
     let device_body = format!("client_id={CLIENT_ID}&scope=read%3Auser");
-    log::debug!("→ POST https://github.com/login/device/code");
+    log::debug!("→ POST {device_code_url}");
     let device: DeviceCodeResponse = client
-        .post("https://github.com/login/device/code")
+        .post(device_code_url)
         .header("Accept", "application/json")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(device_body)
@@ -94,9 +103,9 @@ pub async fn login(
             "client_id={CLIENT_ID}&device_code={}&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code",
             urlencoding::encode(&device.device_code)
         );
-        log::debug!("→ POST https://github.com/login/oauth/access_token");
+        log::debug!("→ POST {access_token_url}");
         let token_resp: DeviceTokenResponse = client
-            .post("https://github.com/login/oauth/access_token")
+            .post(access_token_url)
             .header("Accept", "application/json")
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(token_body)
@@ -133,9 +142,9 @@ pub async fn login(
         }
     };
 
-    log::debug!("→ GET https://api.github.com/copilot_internal/v2/token");
+    log::debug!("→ GET {copilot_token_url}");
     let copilot: CopilotTokenResponse = client
-        .get("https://api.github.com/copilot_internal/v2/token")
+        .get(copilot_token_url)
         .header("Accept", "application/json")
         .header("Authorization", format!("Bearer {github_access}"))
         .header("User-Agent", "GitHubCopilotChat/0.35.0")
@@ -151,16 +160,21 @@ pub async fn login(
     Ok(CopilotCredentials {
         access_token: copilot.token,
         refresh_token: github_access,
-        expires_at: copilot.expires_at * 1000,
+        expires_at: copilot.expires_at,
         base_url,
     })
 }
 
-pub async fn refresh(refresh_token: &str) -> anyhow::Result<CopilotCredentials> {
+pub async fn refresh(
+    refresh_token: &str,
+    copilot_token_url_override: Option<&str>,
+) -> anyhow::Result<CopilotCredentials> {
     let client = reqwest::Client::new();
-    log::debug!("→ GET https://api.github.com/copilot_internal/v2/token (refresh)");
+    let copilot_token_url = copilot_token_url_override
+        .unwrap_or("https://api.github.com/copilot_internal/v2/token");
+    log::debug!("→ GET {copilot_token_url} (refresh)");
     let copilot: CopilotTokenResponse = client
-        .get("https://api.github.com/copilot_internal/v2/token")
+        .get(copilot_token_url)
         .header("Accept", "application/json")
         .header("Authorization", format!("Bearer {refresh_token}"))
         .header("User-Agent", "GitHubCopilotChat/0.35.0")
@@ -175,7 +189,7 @@ pub async fn refresh(refresh_token: &str) -> anyhow::Result<CopilotCredentials> 
         base_url: extract_base_url(&copilot.token),
         access_token: copilot.token,
         refresh_token: refresh_token.to_string(),
-        expires_at: copilot.expires_at * 1000,
+        expires_at: copilot.expires_at,
     })
 }
 
@@ -218,5 +232,73 @@ mod tests {
     #[test]
     fn extract_base_url_returns_none_when_segment_missing() {
         assert_eq!(extract_base_url("foo=bar;baz=qux"), None);
+    }
+
+    // ── Wiremock refresh tests ────────────────────────────────────────────────
+
+    use super::refresh;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    fn mock_copilot_token_response(access_token: &str, expires_at: i64) -> String {
+        format!(
+            r#"{{"token":"{}","expires_at":{}}}"#,
+            access_token, expires_at
+        )
+    }
+
+    #[tokio::test]
+    async fn copilot_refresh_success() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/copilotjsdkf/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                mock_copilot_token_response("fresh-token", 9999999999),
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let url = format!("{}/copilotjsdkf/token", mock_server.uri());
+        let result = refresh("old-refresh-token", Some(&url)).await;
+        assert!(result.is_ok(), "refresh should succeed: {:?}", result.err());
+
+        let creds = result.unwrap();
+        assert_eq!(creds.access_token, "fresh-token");
+        assert_eq!(creds.expires_at, 9999999999);
+    }
+
+    #[tokio::test]
+    async fn copilot_refresh_http_500_returns_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/copilotjsdkf/token"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .mount(&mock_server)
+            .await;
+
+        let url = format!("{}/copilotjsdkf/token", mock_server.uri());
+        let result = refresh("old-refresh-token", Some(&url)).await;
+        assert!(result.is_err(), "refresh should fail on 500");
+    }
+
+    #[tokio::test]
+    async fn copilot_refresh_malformed_json_returns_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/copilotjsdkf/token"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("not valid json {{{"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let url = format!("{}/copilotjsdkf/token", mock_server.uri());
+        let result = refresh("old-refresh-token", Some(&url)).await;
+        assert!(result.is_err(), "refresh should fail on malformed JSON");
     }
 }

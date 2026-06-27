@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc, LazyLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -12,14 +12,17 @@ use sha2::{Digest, Sha256};
 
 use crate::auth::types::GeminiCredentials;
 
-static CLIENT_ID: LazyLock<String> = LazyLock::new(|| {
+/// Resolve the Google OAuth client ID from the environment.
+pub(crate) fn google_client_id() -> anyhow::Result<String> {
     std::env::var("GOOGLE_CLIENT_ID")
-        .expect("GOOGLE_CLIENT_ID environment variable is required for Gemini OAuth")
-});
-static CLIENT_SECRET: LazyLock<String> = LazyLock::new(|| {
+        .map_err(|_| anyhow::anyhow!("GOOGLE_CLIENT_ID environment variable is required for Gemini OAuth"))
+}
+
+/// Resolve the Google OAuth client secret from the environment.
+pub(crate) fn google_client_secret() -> anyhow::Result<String> {
     std::env::var("GOOGLE_CLIENT_SECRET")
-        .expect("GOOGLE_CLIENT_SECRET environment variable is required for Gemini OAuth")
-});
+        .map_err(|_| anyhow::anyhow!("GOOGLE_CLIENT_SECRET environment variable is required for Gemini OAuth"))
+}
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const REDIRECT_URI: &str = "http://localhost:8085/oauth2callback";
@@ -86,14 +89,16 @@ pub async fn login(
     on_event: impl Fn(GeminiLoginEvent),
     cancel: Arc<AtomicBool>,
 ) -> anyhow::Result<GeminiCredentials> {
-    let verifier = random_urlsafe(32);
+    let client_id = google_client_id()?;
+    let client_secret = google_client_secret()?;
+    let verifier = random_urlsafe(32)?;
     let challenge = pkce_challenge(&verifier);
-    let state = random_urlsafe(16);
+    let state = random_urlsafe(16)?;
 
     let mut url = reqwest::Url::parse(AUTH_URL)?;
     {
         let mut qp = url.query_pairs_mut();
-        qp.append_pair("client_id", CLIENT_ID.as_str());
+        qp.append_pair("client_id", &client_id);
         qp.append_pair("response_type", "code");
         qp.append_pair("redirect_uri", REDIRECT_URI);
         qp.append_pair("scope", &SCOPES.join(" "));
@@ -114,7 +119,7 @@ pub async fn login(
     on_event(GeminiLoginEvent::Progress(
         "Exchanging authorization code…".to_string(),
     ));
-    let token = exchange_authorization_code(&code, &verifier).await?;
+    let token = exchange_authorization_code(&code, &verifier, &client_id, &client_secret).await?;
     let refresh_token = token
         .refresh_token
         .ok_or_else(|| anyhow::anyhow!("No refresh token received from Google OAuth"))?;
@@ -124,27 +129,34 @@ pub async fn login(
     ));
     let project_id = discover_project(&token.access_token, cancel, &on_event).await?;
 
-    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+    let now_secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
     Ok(GeminiCredentials {
         access_token: token.access_token,
         refresh_token,
         // Match pi-mono behavior: subtract a 5-minute safety margin.
-        expires_at: now_ms + token.expires_in * 1000 - 5 * 60 * 1000,
+        expires_at: now_secs + token.expires_in - 5 * 60,
         project_id,
     })
 }
 
-pub async fn refresh(refresh_token: &str, project_id: &str) -> anyhow::Result<GeminiCredentials> {
+pub async fn refresh(
+    refresh_token: &str,
+    project_id: &str,
+    token_url_override: Option<&str>,
+) -> anyhow::Result<GeminiCredentials> {
+    let client_id = google_client_id()?;
+    let client_secret = google_client_secret()?;
     let client = reqwest::Client::new();
+    let token_url = token_url_override.unwrap_or(TOKEN_URL);
     let token_body = format!(
         "client_id={}&client_secret={}&refresh_token={}&grant_type=refresh_token",
-        urlencoding::encode(CLIENT_ID.as_str()),
-        urlencoding::encode(CLIENT_SECRET.as_str()),
+        urlencoding::encode(&client_id),
+        urlencoding::encode(&client_secret),
         urlencoding::encode(refresh_token)
     );
 
     let token: TokenResponse = client
-        .post(TOKEN_URL)
+        .post(token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(token_body)
         .send()
@@ -153,23 +165,28 @@ pub async fn refresh(refresh_token: &str, project_id: &str) -> anyhow::Result<Ge
         .json()
         .await?;
 
-    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
+    let now_secs = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
     Ok(GeminiCredentials {
         access_token: token.access_token,
         refresh_token: token
             .refresh_token
             .unwrap_or_else(|| refresh_token.to_string()),
-        expires_at: now_ms + token.expires_in * 1000 - 5 * 60 * 1000,
+        expires_at: now_secs + token.expires_in - 5 * 60,
         project_id: project_id.to_string(),
     })
 }
 
-async fn exchange_authorization_code(code: &str, verifier: &str) -> anyhow::Result<TokenResponse> {
+async fn exchange_authorization_code(
+    code: &str,
+    verifier: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> anyhow::Result<TokenResponse> {
     let client = reqwest::Client::new();
     let token_body = format!(
         "client_id={}&client_secret={}&code={}&grant_type=authorization_code&redirect_uri={}&code_verifier={}",
-        urlencoding::encode(CLIENT_ID.as_str()),
-        urlencoding::encode(CLIENT_SECRET.as_str()),
+        urlencoding::encode(client_id),
+        urlencoding::encode(client_secret),
         urlencoding::encode(code),
         urlencoding::encode(REDIRECT_URI),
         urlencoding::encode(verifier),
@@ -192,7 +209,10 @@ async fn wait_for_callback(state: &str, cancel: Arc<AtomicBool>) -> anyhow::Resu
         net::TcpListener,
     };
 
-    let listener = TcpListener::bind("127.0.0.1:8085").await?;
+    let listener = TcpListener::bind("127.0.0.1:8085").await
+        .map_err(|e| anyhow::anyhow!(
+            "Cannot bind OAuth callback port 8085 (already in use?): {e}"
+        ))?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
 
     loop {
@@ -270,6 +290,21 @@ async fn discover_project(
     cancel: Arc<AtomicBool>,
     on_event: &impl Fn(GeminiLoginEvent),
 ) -> anyhow::Result<String> {
+    discover_project_with_endpoint(
+        access_token,
+        cancel,
+        on_event,
+        CODE_ASSIST_ENDPOINT,
+    ).await
+}
+
+/// Same as discover_project but with a configurable base endpoint for testing.
+pub(crate) async fn discover_project_with_endpoint(
+    access_token: &str,
+    cancel: Arc<AtomicBool>,
+    on_event: &impl Fn(GeminiLoginEvent),
+    endpoint: &str,
+) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
     let env_project_id = std::env::var("GOOGLE_CLOUD_PROJECT")
         .ok()
@@ -286,7 +321,7 @@ async fn discover_project(
     });
 
     let load: LoadCodeAssistResponse = client
-        .post(format!("{CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist"))
+        .post(format!("{endpoint}/v1internal:loadCodeAssist"))
         .bearer_auth(access_token)
         .header("Content-Type", "application/json")
         .header("User-Agent", "google-api-nodejs-client/9.15.1")
@@ -335,7 +370,7 @@ async fn discover_project(
     });
 
     let onboard: LongRunningOperation = client
-        .post(format!("{CODE_ASSIST_ENDPOINT}/v1internal:onboardUser"))
+        .post(format!("{endpoint}/v1internal:onboardUser"))
         .bearer_auth(access_token)
         .header("Content-Type", "application/json")
         .header("User-Agent", "google-api-nodejs-client/9.15.1")
@@ -373,7 +408,7 @@ async fn discover_project(
         }
 
         let op: LongRunningOperation = client
-            .get(format!("{CODE_ASSIST_ENDPOINT}/v1internal/{name}"))
+            .get(format!("{endpoint}/v1internal/{name}"))
             .bearer_auth(access_token)
             .header("Content-Type", "application/json")
             .header("User-Agent", "google-api-nodejs-client/9.15.1")
@@ -402,10 +437,11 @@ async fn discover_project(
     anyhow::bail!("Unable to discover/provision Cloud Code Assist project")
 }
 
-fn random_urlsafe(len: usize) -> String {
+fn random_urlsafe(len: usize) -> anyhow::Result<String> {
     let mut bytes = vec![0u8; len];
-    getrandom::getrandom(&mut bytes).expect("entropy unavailable");
-    URL_SAFE_NO_PAD.encode(bytes)
+    getrandom::getrandom(&mut bytes)
+        .map_err(|e| anyhow::anyhow!("entropy unavailable: {e}"))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn pkce_challenge(verifier: &str) -> String {
@@ -419,7 +455,7 @@ mod tests {
 
     #[test]
     fn random_urlsafe_returns_urlsafe_text() {
-        let value = random_urlsafe(24);
+        let value = random_urlsafe(24).unwrap();
         assert_eq!(value.len(), 32);
         assert!(
             value
@@ -437,5 +473,107 @@ mod tests {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
         );
+    }
+
+    // ── Wiremock refresh tests ────────────────────────────────────────────────
+
+    use std::env;
+
+    use super::refresh;
+    use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+
+    fn mock_google_token_response(access_token: &str, refresh_token: &str, expires_in: i64) -> String {
+        format!(
+            r#"{{"access_token":"{}","refresh_token":"{}","expires_in":{}}}"#,
+            access_token, refresh_token, expires_in
+        )
+    }
+
+    fn set_fake_gemini_env() {
+        unsafe {
+            env::set_var("GOOGLE_CLIENT_ID", "test-client-id");
+            env::set_var("GOOGLE_CLIENT_SECRET", "test-client-secret");
+        }
+    }
+
+    fn unset_fake_gemini_env() {
+        unsafe {
+            env::remove_var("GOOGLE_CLIENT_ID");
+            env::remove_var("GOOGLE_CLIENT_SECRET");
+        }
+    }
+
+    #[tokio::test]
+    async fn gemini_refresh_success() {
+        set_fake_gemini_env();
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                mock_google_token_response("fresh-gemini-tok", "fresh-ref", 3600),
+            ))
+            .mount(&mock_server)
+            .await;
+        let url = format!("{}/token", mock_server.uri());
+        let result = refresh("old-refresh", "test-proj", Some(&url)).await;
+        unset_fake_gemini_env();
+        assert!(result.is_ok(), "refresh should succeed: {:?}", result.err());
+        let creds = result.unwrap();
+        assert_eq!(creds.access_token, "fresh-gemini-tok");
+    }
+
+    #[tokio::test]
+    async fn gemini_refresh_http_400_returns_error() {
+        set_fake_gemini_env();
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("invalid_grant"))
+            .mount(&mock_server)
+            .await;
+        let url = format!("{}/token", mock_server.uri());
+        let result = refresh("old-refresh", "test-proj", Some(&url)).await;
+        unset_fake_gemini_env();
+        assert!(result.is_err());
+    }
+
+    // ── discover_project test ──────────────────────────────────────────────
+
+    use super::discover_project_with_endpoint;
+    use super::GeminiLoginEvent;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    #[tokio::test]
+    async fn discover_project_immediate_return() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1internal:loadCodeAssist"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({
+                    "cloudaicompanionProject": "test-proj-immediate",
+                    "currentTier": {"id": "tier1", "isDefault": true},
+                    "allowedTiers": [{"id": "tier1", "isDefault": true}]
+                }),
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let events = std::sync::Mutex::new(Vec::new());
+        let on_event = |ev: GeminiLoginEvent| {
+            events.lock().unwrap().push(ev);
+        };
+
+        let result = discover_project_with_endpoint(
+            "fake-token",
+            cancel,
+            &on_event,
+            &mock_server.uri(),
+        ).await;
+
+        assert!(result.is_ok(), "discover_project should succeed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "test-proj-immediate");
     }
 }

@@ -166,16 +166,8 @@ impl XiConfig {
 
     pub fn save(&self) -> anyhow::Result<()> {
         let path = config_path()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create config directory: {}", parent.display())
-            })?;
-        }
-
         let body = toml::to_string_pretty(self)?;
-        fs::write(&path, body)
-            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
-        Ok(())
+        crate::atomic_file::save_atomic(&path, &body)
     }
 }
 

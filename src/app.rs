@@ -491,10 +491,8 @@ impl App {
     }
 
     fn provider_supports_token_refresh(&self) -> bool {
-        matches!(
-            self.provider.current_instance.id.as_str(),
-            "copilot" | "codex" | "gemini"
-        )
+        self.provider.current_instance.backend_preset.def().auth_mode
+            == crate::provider_instance::AuthMode::OAuthLogin
     }
 
     /// Trigger a token refresh for unauthorized errors and set up automatic retry.

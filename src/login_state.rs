@@ -115,7 +115,22 @@ impl LoginState {
         let provider = provider.to_string();
 
         tokio::spawn(async move {
-            auth::login_provider(&provider, tx, cancel).await;
+            let backend = match auth::real_backend_for(&provider) {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = tx.send(crate::app_event::AppEvent::Login(
+                        auth::LoginEvent::Error {
+                            provider: provider.clone(),
+                            message: e.to_string(),
+                        },
+                    ));
+                    let _ = tx.send(crate::app_event::AppEvent::Login(
+                        auth::LoginEvent::Finished,
+                    ));
+                    return;
+                }
+            };
+            auth::login_provider(&provider, tx, cancel, backend).await;
         });
     }
 
@@ -290,6 +305,9 @@ impl LoginState {
                 );
                 self.refresh_in_progress = false;
                 if success {
+                    // Reset retry budget so a subsequent 401 still gets one
+                    // reactive retry after a proactive preflight refresh.
+                    self.auth_retry_budget = 1;
                     // Silently refresh — no message added to the chat log or
                     // LLM history; the retry will continue seamlessly.
                     self.needs_rebuild = true;

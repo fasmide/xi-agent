@@ -145,13 +145,14 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    let mut config = match XiConfig::load() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("warning: failed to load config.toml: {e}");
-            XiConfig::default()
-        }
-    };
+    let mut config = XiConfig::load().map_err(|e| {
+        eprintln!(
+            "error: failed to load config.toml: {e}\n\
+             Refusing to start with default config to prevent data loss.\n\
+             Fix or restore ~/.config/xi/config.toml and try again."
+        );
+        io::Error::other("config load failed")
+    })?;
 
     // --theme flag overrides config.toml theme path
     if let Some(theme_path) = cli.theme {

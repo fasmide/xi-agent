@@ -6,6 +6,11 @@ points during an agent session.  They are configured in
 
 ## Hook points
 
+### Lifecycle hooks
+
+These hooks fire at the main decision boundaries of the agent loop.  They
+receive structured JSON on stdin describing the current action.
+
 | Hook point   | When it fires                                                               |
 |--------------|-----------------------------------------------------------------------------|
 | `pre_tool`   | Just before a tool is executed                                              |
@@ -14,6 +19,22 @@ points during an agent session.  They are configured in
 | `post_turn`  | After each LLM cycle completes (may fire multiple times per user prompt)    |
 | `on_done`    | **Once** when the agent finishes its full response to a user prompt         |
 | `on_error`   | When an unhandled error occurs during the agent loop                        |
+
+### Notification hooks
+
+These hooks fire at informational moments.  Most receive **no stdin JSON**
+(only the environment variables) — use them for triggers that don't need
+event data.
+
+| Hook point                | When it fires                                                              |
+|---------------------------|----------------------------------------------------------------------------|
+| `on_tool_intent`          | Model signals intent to use a tool (name known, arguments not yet streamed) |
+| `on_first_thinking_token` | First thinking/chain-of-thought token arrives                              |
+| `on_first_text_token`     | First visible text token arrives                                           |
+| `on_status_update`        | Provider sends a transient status (e.g. rate-limit, retry)                 |
+| `on_compacting`           | Session compaction begins                                                  |
+| `on_external_change`      | External file modification detected before a turn                          |
+| `on_idle`                 | TUI returns to idle, waiting for user input (fires after `on_done`)        |
 
 ## Configuration
 
@@ -32,19 +53,28 @@ picks the **first available** method for the current platform:
 | `cmd`        | `cmd /c <value>`          | Windows (legacy)   |
 | `command`    | Direct executable + `args`| Cross-platform     |
 
+Platform-specific resolution order:
+
+- **Linux / macOS**: `bash` → `powershell` → `command`
+- **Windows**: `powershell` → `cmd` → `bash` → `command`
+
+The `cmd` key is **Windows-only** (ignored on Linux/macOS).  The `powershell`
+key works everywhere — it runs after `bash` on Unix and before `cmd`/`bash`
+on Windows.
+
 Common fields:
 
-| Field           | Type          | Default | Description                                     |
-|-----------------|---------------|---------|-------------------------------------------------|
-| `bash`          | string        | —       | Shell command (`sh -c`)                         |
-| `powershell`    | string        | —       | PowerShell command (`pwsh -c`)                  |
-| `cmd`           | string        | —       | CMD command (`cmd /c`)                         |
-| `command`       | string        | —       | Executable path                                 |
-| `args`          | string list   | `[]`    | Arguments for `command` (ignored for shell keys)|
-| `timeout`       | integer       | `30`    | Max seconds the hook may run                    |
-| `cwd`           | string        | —       | Working directory for the hook process          |
-| `include_tools` | string list   | `[]`    | Only fire for these tools (`pre_tool`/`post_tool`) |
-| `exclude_tools` | string list   | `[]`    | Skip these tools (`pre_tool`/`post_tool`)       |
+| Field           | Type          | Default | Description                                           |
+|-----------------|---------------|---------|-------------------------------------------------------|
+| `bash`          | string        | —       | Shell command (`sh -c`)                               |
+| `powershell`    | string        | —       | PowerShell command (`pwsh -c`)                        |
+| `cmd`           | string        | —       | CMD command (`cmd /c`)                                |
+| `command`       | string        | —       | Executable path                                       |
+| `args`          | string list   | `[]`    | Arguments for `command` (ignored for shell keys)      |
+| `timeout`       | integer       | `30`    | Max seconds the hook may run                          |
+| `cwd`           | string        | —       | Working directory for the hook process                |
+| `include_tools` | string list   | `[]`    | Only fire for these tools (`pre_tool`/`post_tool`/`on_tool_intent`) |
+| `exclude_tools` | string list   | `[]`    | Skip these tools (`pre_tool`/`post_tool`/`on_tool_intent`)         |
 
 ### Examples
 
@@ -97,7 +127,11 @@ powershell = "Write-Host 'running tool'"
 | `XI_HOOK_POINT`   | Hook point name (e.g. `pre_tool`)  |
 | `XI_SESSION_ID`   | Persistent session identifier      |
 
-### Stdin JSON (tool hooks: `pre_tool`, `post_tool`)
+### Stdin JSON (lifecycle hooks)
+
+These payloads let you inspect what the agent is doing.
+
+`pre_tool`, `post_tool`, and `on_tool_intent`:
 
 ```json
 {
@@ -106,7 +140,10 @@ powershell = "Write-Host 'running tool'"
 }
 ```
 
-### Stdin JSON (`post_tool`, adds exit info)
+For `on_tool_intent`, `arguments` is always `null` — the tool name is known
+but arguments have not finished streaming yet.
+
+`post_tool` adds result fields:
 
 ```json
 {
@@ -117,7 +154,10 @@ powershell = "Write-Host 'running tool'"
 }
 ```
 
-### Stdin JSON (`on_error`)
+`exit_code` is `0` on success, `1` on error — it is a **binary flag**, not
+the tool process's real exit code.
+
+`on_error`:
 
 ```json
 {
@@ -126,6 +166,34 @@ powershell = "Write-Host 'running tool'"
   "arguments": { "command": "ls /nonexistent" }
 }
 ```
+
+`tool` and `arguments` are **optional** — they are omitted when the error is
+not tied to a specific tool (e.g. a provider failure).
+
+### Stdin JSON (notification hooks with data)
+
+Only two notification hooks receive stdin JSON:
+
+`on_tool_intent` — same shape as `pre_tool` but `arguments` is `null`:
+
+```json
+{
+  "tool": "bash",
+  "arguments": null
+}
+```
+
+`on_status_update`:
+
+```json
+{
+  "status": "Rate limited, retrying in 7s…"
+}
+```
+
+All other notification hooks (`on_first_thinking_token`, `on_first_text_token`,
+`on_idle`, `on_compacting`, `on_external_change`) receive no stdin JSON —
+only the environment variables above.
 
 ## Behaviour
 

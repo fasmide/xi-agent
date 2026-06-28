@@ -118,12 +118,10 @@ impl LoginState {
             let backend = match auth::real_backend_for(&provider) {
                 Ok(b) => b,
                 Err(e) => {
-                    let _ = tx.send(crate::app_event::AppEvent::Login(
-                        auth::LoginEvent::Error {
-                            provider: provider.clone(),
-                            message: e.to_string(),
-                        },
-                    ));
+                    let _ = tx.send(crate::app_event::AppEvent::Login(auth::LoginEvent::Error {
+                        provider: provider.clone(),
+                        message: e.to_string(),
+                    }));
                     let _ = tx.send(crate::app_event::AppEvent::Login(
                         auth::LoginEvent::Finished,
                     ));

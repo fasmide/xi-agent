@@ -14,14 +14,16 @@ use crate::auth::types::GeminiCredentials;
 
 /// Resolve the Google OAuth client ID from the environment.
 pub(crate) fn google_client_id() -> anyhow::Result<String> {
-    std::env::var("GOOGLE_CLIENT_ID")
-        .map_err(|_| anyhow::anyhow!("GOOGLE_CLIENT_ID environment variable is required for Gemini OAuth"))
+    std::env::var("GOOGLE_CLIENT_ID").map_err(|_| {
+        anyhow::anyhow!("GOOGLE_CLIENT_ID environment variable is required for Gemini OAuth")
+    })
 }
 
 /// Resolve the Google OAuth client secret from the environment.
 pub(crate) fn google_client_secret() -> anyhow::Result<String> {
-    std::env::var("GOOGLE_CLIENT_SECRET")
-        .map_err(|_| anyhow::anyhow!("GOOGLE_CLIENT_SECRET environment variable is required for Gemini OAuth"))
+    std::env::var("GOOGLE_CLIENT_SECRET").map_err(|_| {
+        anyhow::anyhow!("GOOGLE_CLIENT_SECRET environment variable is required for Gemini OAuth")
+    })
 }
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
@@ -209,10 +211,9 @@ async fn wait_for_callback(state: &str, cancel: Arc<AtomicBool>) -> anyhow::Resu
         net::TcpListener,
     };
 
-    let listener = TcpListener::bind("127.0.0.1:8085").await
-        .map_err(|e| anyhow::anyhow!(
-            "Cannot bind OAuth callback port 8085 (already in use?): {e}"
-        ))?;
+    let listener = TcpListener::bind("127.0.0.1:8085").await.map_err(|e| {
+        anyhow::anyhow!("Cannot bind OAuth callback port 8085 (already in use?): {e}")
+    })?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
 
     loop {
@@ -290,12 +291,7 @@ async fn discover_project(
     cancel: Arc<AtomicBool>,
     on_event: &impl Fn(GeminiLoginEvent),
 ) -> anyhow::Result<String> {
-    discover_project_with_endpoint(
-        access_token,
-        cancel,
-        on_event,
-        CODE_ASSIST_ENDPOINT,
-    ).await
+    discover_project_with_endpoint(access_token, cancel, on_event, CODE_ASSIST_ENDPOINT).await
 }
 
 /// Same as discover_project but with a configurable base endpoint for testing.
@@ -439,8 +435,7 @@ pub(crate) async fn discover_project_with_endpoint(
 
 fn random_urlsafe(len: usize) -> anyhow::Result<String> {
     let mut bytes = vec![0u8; len];
-    getrandom::getrandom(&mut bytes)
-        .map_err(|e| anyhow::anyhow!("entropy unavailable: {e}"))?;
+    getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("entropy unavailable: {e}"))?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
@@ -480,9 +475,16 @@ mod tests {
     use std::env;
 
     use super::refresh;
-    use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
 
-    fn mock_google_token_response(access_token: &str, refresh_token: &str, expires_in: i64) -> String {
+    fn mock_google_token_response(
+        access_token: &str,
+        refresh_token: &str,
+        expires_in: i64,
+    ) -> String {
         format!(
             r#"{{"access_token":"{}","refresh_token":"{}","expires_in":{}}}"#,
             access_token, refresh_token, expires_in
@@ -509,9 +511,13 @@ mod tests {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                mock_google_token_response("fresh-gemini-tok", "fresh-ref", 3600),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(mock_google_token_response(
+                    "fresh-gemini-tok",
+                    "fresh-ref",
+                    3600,
+                )),
+            )
             .mount(&mock_server)
             .await;
         let url = format!("{}/token", mock_server.uri());
@@ -539,8 +545,8 @@ mod tests {
 
     // ── discover_project test ──────────────────────────────────────────────
 
-    use super::discover_project_with_endpoint;
     use super::GeminiLoginEvent;
+    use super::discover_project_with_endpoint;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -550,13 +556,11 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/v1internal:loadCodeAssist"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({
-                    "cloudaicompanionProject": "test-proj-immediate",
-                    "currentTier": {"id": "tier1", "isDefault": true},
-                    "allowedTiers": [{"id": "tier1", "isDefault": true}]
-                }),
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "cloudaicompanionProject": "test-proj-immediate",
+                "currentTier": {"id": "tier1", "isDefault": true},
+                "allowedTiers": [{"id": "tier1", "isDefault": true}]
+            })))
             .mount(&mock_server)
             .await;
 
@@ -566,14 +570,15 @@ mod tests {
             events.lock().unwrap().push(ev);
         };
 
-        let result = discover_project_with_endpoint(
-            "fake-token",
-            cancel,
-            &on_event,
-            &mock_server.uri(),
-        ).await;
+        let result =
+            discover_project_with_endpoint("fake-token", cancel, &on_event, &mock_server.uri())
+                .await;
 
-        assert!(result.is_ok(), "discover_project should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "discover_project should succeed: {:?}",
+            result.err()
+        );
         assert_eq!(result.unwrap(), "test-proj-immediate");
     }
 }

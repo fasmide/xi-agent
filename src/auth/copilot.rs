@@ -55,12 +55,12 @@ pub async fn login(
     copilot_token_url_override: Option<&str>,
 ) -> anyhow::Result<CopilotCredentials> {
     let client = reqwest::Client::new();
-    let device_code_url = device_code_url_override
-        .unwrap_or("https://github.com/login/device/code");
-    let access_token_url = access_token_url_override
-        .unwrap_or("https://github.com/login/oauth/access_token");
-    let copilot_token_url = copilot_token_url_override
-        .unwrap_or("https://api.github.com/copilot_internal/v2/token");
+    let device_code_url =
+        device_code_url_override.unwrap_or("https://github.com/login/device/code");
+    let access_token_url =
+        access_token_url_override.unwrap_or("https://github.com/login/oauth/access_token");
+    let copilot_token_url =
+        copilot_token_url_override.unwrap_or("https://api.github.com/copilot_internal/v2/token");
 
     let device_body = format!("client_id={CLIENT_ID}&scope=read%3Auser");
     log::debug!("→ POST {device_code_url}");
@@ -170,8 +170,8 @@ pub async fn refresh(
     copilot_token_url_override: Option<&str>,
 ) -> anyhow::Result<CopilotCredentials> {
     let client = reqwest::Client::new();
-    let copilot_token_url = copilot_token_url_override
-        .unwrap_or("https://api.github.com/copilot_internal/v2/token");
+    let copilot_token_url =
+        copilot_token_url_override.unwrap_or("https://api.github.com/copilot_internal/v2/token");
     log::debug!("→ GET {copilot_token_url} (refresh)");
     let copilot: CopilotTokenResponse = client
         .get(copilot_token_url)
@@ -238,8 +238,8 @@ mod tests {
 
     use super::refresh;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     fn mock_copilot_token_response(access_token: &str, expires_at: i64) -> String {
@@ -255,9 +255,10 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/copilotjsdkf/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                mock_copilot_token_response("fresh-token", 9999999999),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(mock_copilot_token_response("fresh-token", 9999999999)),
+            )
             .mount(&mock_server)
             .await;
 
@@ -291,9 +292,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/copilotjsdkf/token"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_string("not valid json {{{"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string("not valid json {{{"))
             .mount(&mock_server)
             .await;
 

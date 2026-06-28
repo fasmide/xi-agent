@@ -122,10 +122,7 @@ pub async fn login_provider(
 ///
 /// `backend` is injected so tests can substitute a mock. In production,
 /// callers build the backend with [`real_backend_for`].
-pub async fn refresh_token(
-    provider: &str,
-    backend: Arc<dyn OAuthBackend>,
-) -> anyhow::Result<()> {
+pub async fn refresh_token(provider: &str, backend: Arc<dyn OAuthBackend>) -> anyhow::Result<()> {
     log::debug!("refresh_token called: provider={provider}");
     let mut store = AuthStore::load_default()?;
     let refresh_tok = store
@@ -303,13 +300,13 @@ mod tests {
 
     // ── login_provider orchestration tests ────────────────────────────────────
 
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
     use crate::app_event::AppEvent;
     use crate::auth::mock::{MockOAuthBackend, fake_copilot_creds};
-    use tempfile::TempDir;
     use crate::auth::store::AuthStore;
     use crate::auth::types::ProviderCredentials;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
 
     /// Override the auth file path for the duration of a test.
@@ -322,7 +319,9 @@ mod tests {
             let tmp = TempDir::new().unwrap();
             let path = tmp.path().join("auth.toml");
             // SAFETY: single-threaded test, no concurrent env access.
-            unsafe { std::env::set_var("XI_AUTH_FILE", path.to_str().unwrap()); }
+            unsafe {
+                std::env::set_var("XI_AUTH_FILE", path.to_str().unwrap());
+            }
             Self { _tmp: tmp }
         }
     }
@@ -330,17 +329,16 @@ mod tests {
     impl Drop for AuthPathOverride {
         fn drop(&mut self) {
             // SAFETY: single-threaded test, no concurrent env access.
-            unsafe { std::env::remove_var("XI_AUTH_FILE"); }
+            unsafe {
+                std::env::remove_var("XI_AUTH_FILE");
+            }
         }
     }
 
     #[tokio::test]
     async fn login_provider_success_emits_event_sequence() {
         let _override = AuthPathOverride::new();
-        let mock = Arc::new(
-            MockOAuthBackend::new()
-                .expect_login(Ok(fake_copilot_creds())),
-        );
+        let mock = Arc::new(MockOAuthBackend::new().expect_login(Ok(fake_copilot_creds())));
 
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -357,15 +355,21 @@ mod tests {
         .collect();
 
         assert!(
-            events.iter().any(|e| matches!(e, LoginEvent::Info(m) if m.contains("Starting login"))),
+            events
+                .iter()
+                .any(|e| matches!(e, LoginEvent::Info(m) if m.contains("Starting login"))),
             "expected Info event"
         );
         assert!(
-            events.iter().any(|e| matches!(e, LoginEvent::AuthCode { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, LoginEvent::AuthCode { .. })),
             "expected AuthCode event"
         );
         assert!(
-            events.iter().any(|e| matches!(e, LoginEvent::Success { provider } if provider == "copilot")),
+            events
+                .iter()
+                .any(|e| matches!(e, LoginEvent::Success { provider } if provider == "copilot")),
             "expected Success event"
         );
         assert!(
@@ -375,15 +379,17 @@ mod tests {
 
         // Verify credentials were persisted
         let store = AuthStore::load_default().unwrap();
-        assert!(store.get_copilot().is_some(), "credentials should be persisted");
+        assert!(
+            store.get_copilot().is_some(),
+            "credentials should be persisted"
+        );
     }
 
     #[tokio::test]
     async fn login_provider_error_emits_error_event() {
         let _override = AuthPathOverride::new();
         let mock = Arc::new(
-            MockOAuthBackend::new()
-                .expect_login(Err(anyhow::anyhow!("provider rejected"))),
+            MockOAuthBackend::new().expect_login(Err(anyhow::anyhow!("provider rejected"))),
         );
 
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
@@ -400,7 +406,9 @@ mod tests {
         .collect();
 
         assert!(
-            events.iter().any(|e| matches!(e, LoginEvent::Error { message, .. } if message == "provider rejected")),
+            events.iter().any(
+                |e| matches!(e, LoginEvent::Error { message, .. } if message == "provider rejected")
+            ),
             "expected Error event with message"
         );
         assert!(
@@ -412,10 +420,8 @@ mod tests {
     #[tokio::test]
     async fn login_provider_cancelled_emits_cancelled_error() {
         let _override = AuthPathOverride::new();
-        let mock = Arc::new(
-            MockOAuthBackend::new()
-                .expect_login(Err(anyhow::anyhow!("Login cancelled"))),
-        );
+        let mock =
+            Arc::new(MockOAuthBackend::new().expect_login(Err(anyhow::anyhow!("Login cancelled"))));
 
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let cancel = Arc::new(AtomicBool::new(true)); // already cancelled
@@ -431,7 +437,9 @@ mod tests {
         .collect();
 
         assert!(
-            events.iter().any(|e| matches!(e, LoginEvent::Error { message, .. } if message == "Login cancelled")),
+            events.iter().any(
+                |e| matches!(e, LoginEvent::Error { message, .. } if message == "Login cancelled")
+            ),
             "expected cancelled error"
         );
     }
@@ -545,10 +553,7 @@ mod tests {
             store.get_refresh_token("copilot").as_deref(),
             Some("rt_cop")
         );
-        assert_eq!(
-            store.get_refresh_token("codex").as_deref(),
-            Some("rt_cod")
-        );
+        assert_eq!(store.get_refresh_token("codex").as_deref(), Some("rt_cod"));
         assert_eq!(store.get_refresh_token("unknown"), None);
     }
 

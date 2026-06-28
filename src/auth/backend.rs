@@ -27,8 +27,7 @@ use crate::auth::{AuthFlow, LoginEvent, types::ProviderCredentials};
 /// Boxed future returned by trait methods — required for dyn compatibility.
 /// `async fn` in traits (RPITIT) is not dyn-compatible; `Pin<Box<dyn Future>>`
 /// is.
-pub type BackendFuture<T> =
-    Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'static>>;
+pub type BackendFuture<T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'static>>;
 
 /// A pluggable OAuth backend for a single provider.
 ///
@@ -118,10 +117,8 @@ impl OAuthBackend for CopilotBackend {
         let refresh_token = refresh_token.to_string();
         let copilot_token_url = self.copilot_token_url.clone();
         Box::pin(async move {
-            let creds = super::copilot::refresh(
-                &refresh_token,
-                copilot_token_url.as_deref(),
-            ).await?;
+            let creds =
+                super::copilot::refresh(&refresh_token, copilot_token_url.as_deref()).await?;
             Ok(ProviderCredentials::Copilot {
                 access_token: creds.access_token,
                 refresh_token: creds.refresh_token,
@@ -188,10 +185,8 @@ impl OAuthBackend for CodexBackend {
         let refresh_token = refresh_token.to_string();
         let token_url_override = self.token_url_override.clone();
         Box::pin(async move {
-            let creds = super::codex::refresh(
-                &refresh_token,
-                token_url_override.as_deref(),
-            ).await?;
+            let creds =
+                super::codex::refresh(&refresh_token, token_url_override.as_deref()).await?;
             Ok(ProviderCredentials::Codex {
                 access_token: creds.access_token,
                 refresh_token: creds.refresh_token,
@@ -254,11 +249,9 @@ impl OAuthBackend for GeminiBackend {
         let project_id = self.project_id.clone();
         let token_url_override = self.token_url_override.clone();
         Box::pin(async move {
-            let creds = super::gemini::refresh(
-                &refresh_token,
-                &project_id,
-                token_url_override.as_deref(),
-            ).await?;
+            let creds =
+                super::gemini::refresh(&refresh_token, &project_id, token_url_override.as_deref())
+                    .await?;
             Ok(ProviderCredentials::Gemini {
                 access_token: creds.access_token,
                 refresh_token: creds.refresh_token,
@@ -313,7 +306,10 @@ pub fn real_backend_for(provider: &str) -> anyhow::Result<Arc<dyn OAuthBackend>>
                 .and_then(|s| s.get_gemini())
                 .map(|c| c.project_id)
                 .unwrap_or_default();
-            Ok(Arc::new(GeminiBackend { project_id, token_url_override: None }) as Arc<dyn OAuthBackend>)
+            Ok(Arc::new(GeminiBackend {
+                project_id,
+                token_url_override: None,
+            }) as Arc<dyn OAuthBackend>)
         }
         other => Err(anyhow::anyhow!("Unknown OAuth provider: {other}")),
     }

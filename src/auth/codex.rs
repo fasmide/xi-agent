@@ -144,9 +144,7 @@ async fn wait_for_callback(state: &str, cancel: Arc<AtomicBool>) -> anyhow::Resu
     let addr: SocketAddr = "127.0.0.1:1455".parse()?;
     let listener = TcpListener::bind(addr).await.map_err(|e| {
         log::debug!("codex oauth callback bind failed: {}", e);
-        anyhow::anyhow!(
-            "Cannot bind OAuth callback port 1455 (already in use?): {e}"
-        )
+        anyhow::anyhow!("Cannot bind OAuth callback port 1455 (already in use?): {e}")
     })?;
     log::debug!("codex oauth callback listener bound on 127.0.0.1:1455");
 
@@ -222,8 +220,7 @@ async fn wait_for_callback(state: &str, cancel: Arc<AtomicBool>) -> anyhow::Resu
 
 fn random_urlsafe(len: usize) -> anyhow::Result<String> {
     let mut bytes = vec![0u8; len];
-    getrandom::getrandom(&mut bytes)
-        .map_err(|e| anyhow::anyhow!("entropy unavailable: {e}"))?;
+    getrandom::getrandom(&mut bytes).map_err(|e| anyhow::anyhow!("entropy unavailable: {e}"))?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
@@ -307,12 +304,23 @@ mod tests {
     // ── Wiremock refresh tests ────────────────────────────────────────────────
 
     use super::refresh;
-    use wiremock::{matchers::{method, path}, Mock, MockServer, ResponseTemplate};
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
 
-    fn mock_codex_token_response(_access_token: &str, refresh_token: &str, expires_in: i64) -> String {
+    fn mock_codex_token_response(
+        _access_token: &str,
+        refresh_token: &str,
+        expires_in: i64,
+    ) -> String {
         // Build a minimal JWT with the claim needed by extract_account_id.
-        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
-        let payload_json = format!(r#"{{"https://api.openai.com/auth":{{"chatgpt_account_id":"{}"}}}}"#, "acct_test");
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"alg":"none","typ":"JWT"}"#);
+        let payload_json = format!(
+            r#"{{"https://api.openai.com/auth":{{"chatgpt_account_id":"{}"}}}}"#,
+            "acct_test"
+        );
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload_json);
         let jwt = format!("{}.{}.sig", header, payload);
         format!(
@@ -327,9 +335,13 @@ mod tests {
 
         Mock::given(method("POST"))
             .and(path("/oauth/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                mock_codex_token_response("fresh-codex-tok", "fresh-ref", 3600),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(mock_codex_token_response(
+                    "fresh-codex-tok",
+                    "fresh-ref",
+                    3600,
+                )),
+            )
             .mount(&mock_server)
             .await;
 
@@ -375,7 +387,9 @@ mod tests {
             conn.write_all(
                 b"GET /auth/callback?code=code-a&state=state-a HTTP/1.1\r\n\
                   Host: localhost:1455\r\nConnection: close\r\n\r\n",
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
             let mut buf = vec![0u8; 4096];
             let _ = conn.read(&mut buf).await;
             assert_eq!(handle.await.unwrap().unwrap(), "code-a");
@@ -393,7 +407,9 @@ mod tests {
             conn.write_all(
                 b"GET /auth/callback?code=bad&state=bad-state HTTP/1.1\r\n\
                   Host: localhost:1455\r\nConnection: close\r\n\r\n",
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
             let mut buf = vec![0u8; 4096];
             let _ = conn.read(&mut buf).await;
             drop(conn);
@@ -411,7 +427,9 @@ mod tests {
             conn.write_all(
                 b"GET /auth/callback?code=good-code&state=good-state HTTP/1.1\r\n\
                   Host: localhost:1455\r\nConnection: close\r\n\r\n",
-            ).await.unwrap();
+            )
+            .await
+            .unwrap();
             let mut buf = vec![0u8; 4096];
             let _ = conn.read(&mut buf).await;
 

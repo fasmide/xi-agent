@@ -491,7 +491,11 @@ impl App {
     }
 
     fn provider_supports_token_refresh(&self) -> bool {
-        self.provider.current_instance.backend_preset.def().auth_mode
+        self.provider
+            .current_instance
+            .backend_preset
+            .def()
+            .auth_mode
             == crate::provider_instance::AuthMode::OAuthLogin
     }
 

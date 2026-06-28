@@ -346,7 +346,10 @@ mod tests {
 
         // `create_dir_all` will fail because the parent is a file.
         let result = atomic_file::save_atomic(&path, "test content");
-        assert!(result.is_err(), "save_atomic should fail when parent is a file");
+        assert!(
+            result.is_err(),
+            "save_atomic should fail when parent is a file"
+        );
     }
 
     #[test]

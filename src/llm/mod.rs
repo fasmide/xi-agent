@@ -53,14 +53,27 @@ pub struct UsageStats {
 
 impl UsageStats {
     /// Best-effort count of used tokens for utilization display.
+    ///
+    /// Adds `cached_tokens` when the provider reports them separately from
+    /// `input_tokens` (Anthropic).  For providers that include cached tokens
+    /// in `input_tokens` (OpenAI) the `cached` count is a subset and is
+    /// detected via `cached <= input`; in that case only the `total` /
+    /// `input + output` sum is returned to avoid double-counting.
     pub fn used_tokens(&self) -> Option<usize> {
-        self.total_tokens
+        let base = self
+            .total_tokens
             .or_else(|| match (self.input_tokens, self.output_tokens) {
                 (Some(i), Some(o)) => Some(i.saturating_add(o)),
                 _ => None,
             })
             .or(self.input_tokens)
-            .or(self.output_tokens)
+            .or(self.output_tokens);
+
+        match (base, self.input_tokens, self.cached_tokens) {
+            // Anthropic reports input_tokens excluding cache hits; add them in.
+            (Some(b), Some(i), Some(c)) if c > i => Some(b.saturating_add(c)),
+            _ => base,
+        }
     }
 }
 
@@ -416,5 +429,110 @@ mod tests {
         assert_eq!(decoded.tool_call_id, original.tool_call_id);
         assert_eq!(decoded.tool_name, original.tool_name);
         assert_eq!(decoded.tool_args, original.tool_args);
+    }
+
+    // ── UsageStats::used_tokens ──────────────────────────────────────────────
+
+    #[test]
+    fn used_tokens_returns_total_when_present() {
+        let stats = UsageStats {
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            total_tokens: Some(150),
+            cached_tokens: None,
+        };
+        assert_eq!(stats.used_tokens(), Some(150));
+    }
+
+    #[test]
+    fn used_tokens_falls_back_to_input_plus_output() {
+        let stats = UsageStats {
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            total_tokens: None,
+            cached_tokens: None,
+        };
+        assert_eq!(stats.used_tokens(), Some(150));
+    }
+
+    #[test]
+    fn used_tokens_falls_back_to_input_only() {
+        let stats = UsageStats {
+            input_tokens: Some(100),
+            output_tokens: None,
+            total_tokens: None,
+            cached_tokens: None,
+        };
+        assert_eq!(stats.used_tokens(), Some(100));
+    }
+
+    #[test]
+    fn used_tokens_falls_back_to_output_only() {
+        let stats = UsageStats {
+            input_tokens: None,
+            output_tokens: Some(50),
+            total_tokens: None,
+            cached_tokens: None,
+        };
+        assert_eq!(stats.used_tokens(), Some(50));
+    }
+
+    #[test]
+    fn used_tokens_returns_none_when_no_data() {
+        let stats = UsageStats::default();
+        assert_eq!(stats.used_tokens(), None);
+    }
+
+    /// Anthropic reports input_tokens as uncached only, so cached tokens
+    /// must be added to get the true context-window utilisation.
+    #[test]
+    fn used_tokens_adds_cached_when_larger_than_input_anthropic_behavior() {
+        let stats = UsageStats {
+            input_tokens: Some(800),     // uncached input
+            output_tokens: Some(200),    // output
+            total_tokens: Some(1000), // input + output (unused by used_tokens when cached > input)
+            cached_tokens: Some(20_000), // cache read
+        };
+        // 1000 (input+output) + 20000 (cached) = 21000
+        assert_eq!(stats.used_tokens(), Some(21_000));
+    }
+
+    /// OpenAI reports input_tokens already including cached tokens, so
+    /// cached should NOT be added to avoid double-counting.
+    #[test]
+    fn used_tokens_does_not_double_count_openai_behavior() {
+        let stats = UsageStats {
+            input_tokens: Some(20_000), // total prompt tokens (includes cached)
+            output_tokens: Some(200),
+            total_tokens: Some(20_200),
+            cached_tokens: Some(19_000), // subset of input
+        };
+        // cached <= input, so it's not added → returns total_tokens
+        assert_eq!(stats.used_tokens(), Some(20_200));
+    }
+
+    /// When input_tokens is None but cached is present, include it.
+    #[test]
+    fn used_tokens_includes_cached_when_input_is_none() {
+        let stats = UsageStats {
+            input_tokens: None,
+            output_tokens: Some(100),
+            total_tokens: None,
+            cached_tokens: Some(5_000),
+        };
+        // None matches the catch-all => returns base (output_only=100)
+        assert_eq!(stats.used_tokens(), Some(100));
+    }
+
+    /// Edge case: cached == input exactly — cached is likely a subset.
+    #[test]
+    fn used_tokens_does_not_add_cached_when_equal_to_input() {
+        let stats = UsageStats {
+            input_tokens: Some(100),
+            output_tokens: Some(50),
+            total_tokens: None,
+            cached_tokens: Some(100),
+        };
+        assert_eq!(stats.used_tokens(), Some(150)); // input + output only
     }
 }

@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::app_event::{AppEvent, SendIgnore};
-use crate::hooks::{HookPoint, post_tool_json, tool_json};
+use crate::hooks::{HookConfig, HookPoint, maybe_run_hook, post_tool_json, tool_json};
 use crate::llm::{AssistantPhase, LlmEvent, LlmProvider, Message, ToolDefinition, UsageStats};
 use crate::projection::LlmProjection;
 use crate::session_event::{CompactionTrigger, SessionEvent};
@@ -119,15 +119,25 @@ async fn emit_compaction(
     provider: Arc<dyn LlmProvider>,
     tx: &UnboundedSender<AppEvent>,
     session_events: &[SessionEvent],
-    model: &str,
+    config: &AgentLoopConfig,
     trigger_reason: CompactionTrigger,
     user_instructions: Option<String>,
 ) -> Result<compaction::CompactionOutcome, crate::llm::ProviderError> {
+    // ── Pre-turn hook equivalent for compaction ────────────────────────────
+    crate::hooks::maybe_run_hook(
+        &config.hooks,
+        HookPoint::OnCompacting,
+        &config.session_id,
+        None,
+        None,
+    )
+    .await;
+
     tx.send_ignore(AppEvent::Agent(AgentEvent::Compacting));
     let outcome = compaction::compact_events(
         provider,
         session_events,
-        model,
+        &config.current_model,
         trigger_reason,
         user_instructions,
     )
@@ -148,6 +158,8 @@ async fn stream_assistant_turn(
     tool_defs: Vec<ToolDefinition>,
     tx: &UnboundedSender<AppEvent>,
     overflow_retry_remaining: usize,
+    hooks: &std::collections::HashMap<HookPoint, Vec<HookConfig>>,
+    session_id: &str,
 ) -> TurnOutcome {
     // Build a lookup from tool name → streaming_field for intent events.
     let streaming_fields: std::collections::HashMap<String, Option<String>> = tool_defs
@@ -163,10 +175,17 @@ async fn stream_assistant_turn(
     let mut pending_tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
     let mut tool_intent_seen = false;
     let mut latest_usage = None;
+    let mut first_thinking_token = true;
+    let mut first_text_token = true;
 
     while let Some(ev) = stream.next().await {
         match ev {
             LlmEvent::Token { text, phase } => {
+                if first_text_token {
+                    first_text_token = false;
+                    maybe_run_hook(hooks, HookPoint::OnFirstTextToken, session_id, None, None)
+                        .await;
+                }
                 tx.send_ignore(AppEvent::Agent(AgentEvent::TextToken {
                     text: text.clone(),
                     phase,
@@ -177,6 +196,17 @@ async fn stream_assistant_turn(
                 }
             }
             LlmEvent::ThinkingToken(t) => {
+                if first_thinking_token {
+                    first_thinking_token = false;
+                    maybe_run_hook(
+                        hooks,
+                        HookPoint::OnFirstThinkingToken,
+                        session_id,
+                        None,
+                        None,
+                    )
+                    .await;
+                }
                 tx.send_ignore(AppEvent::Agent(AgentEvent::ThinkingToken(t.clone())));
                 assistant_thinking
                     .get_or_insert_with(String::new)
@@ -190,11 +220,20 @@ async fn stream_assistant_turn(
                 let streaming_field = streaming_fields.get(&name).and_then(|f| f.clone());
                 tx.send_ignore(AppEvent::Agent(AgentEvent::ToolCallIntent {
                     id,
-                    name,
+                    name: name.clone(),
                     streaming_field,
                 }));
                 assistant_phase = AssistantPhase::Provisional;
                 tool_intent_seen = true;
+                // Fire display hook as soon as tool name is known (before args).
+                crate::hooks::maybe_run_hook(
+                    hooks,
+                    HookPoint::OnToolIntent,
+                    session_id,
+                    Some(crate::hooks::tool_json(&name, &serde_json::Value::Null)),
+                    Some(&name),
+                )
+                .await;
             }
             LlmEvent::ToolCallArgsDelta { id, partial_json } => {
                 tx.send_ignore(AppEvent::Agent(AgentEvent::ToolCallArgsDelta {
@@ -213,7 +252,15 @@ async fn stream_assistant_turn(
                 return TurnOutcome::Error(e);
             }
             LlmEvent::StatusUpdate(msg) => {
-                tx.send_ignore(AppEvent::Agent(AgentEvent::StatusUpdate(msg)));
+                tx.send_ignore(AppEvent::Agent(AgentEvent::StatusUpdate(msg.clone())));
+                maybe_run_hook(
+                    hooks,
+                    HookPoint::OnStatusUpdate,
+                    session_id,
+                    Some(serde_json::json!({"status": msg})),
+                    None,
+                )
+                .await;
             }
         }
     }
@@ -376,7 +423,7 @@ pub async fn run_agent_loop(
             Arc::clone(&provider),
             &tx,
             &session_events,
-            &config.current_model,
+            &config,
             CompactionTrigger::Threshold,
             config.manual_compaction_instructions.clone(),
         )
@@ -389,6 +436,14 @@ pub async fn run_agent_loop(
         crate::hooks::maybe_run_hook(
             &config.hooks,
             HookPoint::OnDone,
+            &config.session_id,
+            None,
+            None,
+        )
+        .await;
+        crate::hooks::maybe_run_hook(
+            &config.hooks,
+            HookPoint::OnIdle,
             &config.session_id,
             None,
             None,
@@ -413,6 +468,14 @@ pub async fn run_agent_loop(
                 content: notification.clone(),
                 timestamp: 0,
             });
+            crate::hooks::maybe_run_hook(
+                &config.hooks,
+                HookPoint::OnExternalChange,
+                &config.session_id,
+                None,
+                None,
+            )
+            .await;
             tx.send_ignore(AppEvent::Agent(AgentEvent::ExternalFileChange {
                 paths,
                 notification,
@@ -444,6 +507,8 @@ pub async fn run_agent_loop(
             tool_defs.clone(),
             &tx,
             overflow_retry_remaining,
+            &config.hooks,
+            &config.session_id,
         )
         .await;
 
@@ -490,7 +555,7 @@ pub async fn run_agent_loop(
                     Arc::clone(&provider),
                     &tx,
                     &session_events,
-                    &config.current_model,
+                    &config,
                     CompactionTrigger::OverflowRetry,
                     None,
                 )
@@ -567,7 +632,7 @@ pub async fn run_agent_loop(
                             Arc::clone(&provider),
                             &tx,
                             &session_events,
-                            &config.current_model,
+                            &config,
                             CompactionTrigger::Threshold,
                             None,
                         )
@@ -583,6 +648,14 @@ pub async fn run_agent_loop(
                 crate::hooks::maybe_run_hook(
                     &config.hooks,
                     HookPoint::OnDone,
+                    &config.session_id,
+                    None,
+                    None,
+                )
+                .await;
+                crate::hooks::maybe_run_hook(
+                    &config.hooks,
+                    HookPoint::OnIdle,
                     &config.session_id,
                     None,
                     None,

@@ -48,7 +48,10 @@ use tokio::process::Command;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookPoint {
-    /// Just before a tool is executed.
+    /// Fires as soon as the model indicates intent to use a tool (tool name is
+    /// known but arguments have not necessarily been fully streamed yet).
+    OnToolIntent,
+    /// Just before a tool is executed (full arguments are known).
     PreTool,
     /// Just after a tool completes.
     PostTool,
@@ -64,17 +67,36 @@ pub enum HookPoint {
     /// After the agent finishes its full response to a user prompt — fires
     /// once when the final answer has been delivered and the loop exits.
     OnDone,
+    /// When the first thinking/chain-of-thought token arrives from the model.
+    OnFirstThinkingToken,
+    /// When the first visible text token arrives from the model.
+    OnFirstTextToken,
+    /// Fires once when the TUI returns to idle (waiting for user input).
+    OnIdle,
+    /// When session compaction begins.
+    OnCompacting,
+    /// When an external file modification is detected before a turn.
+    OnExternalChange,
+    /// When the provider sends a transient status update (e.g. rate-limit).
+    OnStatusUpdate,
 }
 
 impl std::fmt::Display for HookPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::OnToolIntent => write!(f, "on_tool_intent"),
             Self::PreTool => write!(f, "pre_tool"),
             Self::PostTool => write!(f, "post_tool"),
             Self::PreTurn => write!(f, "pre_turn"),
             Self::PostTurn => write!(f, "post_turn"),
             Self::OnError => write!(f, "on_error"),
             Self::OnDone => write!(f, "on_done"),
+            Self::OnFirstThinkingToken => write!(f, "on_first_thinking_token"),
+            Self::OnFirstTextToken => write!(f, "on_first_text_token"),
+            Self::OnIdle => write!(f, "on_idle"),
+            Self::OnCompacting => write!(f, "on_compacting"),
+            Self::OnExternalChange => write!(f, "on_external_change"),
+            Self::OnStatusUpdate => write!(f, "on_status_update"),
         }
     }
 }
@@ -452,6 +474,7 @@ mod tests {
     #[test]
     fn hook_point_display_and_deserialize() {
         let cases = [
+            (HookPoint::OnToolIntent, "on_tool_intent"),
             (HookPoint::PreTool, "pre_tool"),
             (HookPoint::PostTool, "post_tool"),
             (HookPoint::PreTurn, "pre_turn"),

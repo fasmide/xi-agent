@@ -5,6 +5,34 @@ use anyhow::Context;
 use crate::hooks::{HookConfig, HookPoint};
 use crate::provider_instance::{BackendPreset, ProviderInstance};
 
+#[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize)]
+pub struct HookIpcConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+
+impl HookIpcConfig {
+    pub fn default_endpoint() -> &'static str {
+        #[cfg(windows)]
+        {
+            r#"\\.\pipe\xi-hook-events"#
+        }
+
+        #[cfg(unix)]
+        {
+            "/tmp/xi-hook-events.sock"
+        }
+    }
+
+    pub fn effective_endpoint(&self) -> String {
+        self.endpoint
+            .clone()
+            .unwrap_or_else(|| Self::default_endpoint().to_string())
+    }
+}
+
 /// Display thresholds — presentation choices that control how much content
 /// is shown in the UI. These do not affect how much is sent to the model.
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -47,6 +75,10 @@ pub struct XiConfig {
     /// Each hook point supports an array of hook configurations.
     #[serde(default)]
     pub hooks: HashMap<HookPoint, Vec<HookConfig>>,
+
+    /// Best-effort IPC publisher for hook events.
+    #[serde(default)]
+    pub hook_ipc: HookIpcConfig,
 
     // Provider-specific persisted settings (legacy per-preset config; kept for
     // backward-compatible TOML parsing and any UI convenience state that still
@@ -179,7 +211,7 @@ pub fn config_path() -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::XiConfig;
+    use super::{HookIpcConfig, XiConfig};
     use crate::provider_instance::{ApiType, BackendPreset, ProviderInstance};
 
     // ── Instance-format config tests ─────────────────────────────────────────
@@ -469,5 +501,43 @@ timeout = 5
             .expect("pre_tool hook preserved");
         assert_eq!(pre.bash.as_deref(), Some("echo hello"));
         assert_eq!(pre.timeout, 5);
+    }
+
+    #[test]
+    fn hook_ipc_section_parses() {
+        let raw = r#"
+[hook_ipc]
+enabled = true
+"#;
+        let cfg = XiConfig::from_toml_str(raw).expect("config with hook_ipc parses");
+        assert!(cfg.hook_ipc.enabled);
+        assert_eq!(
+            cfg.hook_ipc.effective_endpoint(),
+            HookIpcConfig::default_endpoint()
+        );
+    }
+
+    #[test]
+    fn hook_ipc_endpoint_override_parses() {
+        let raw = r#"
+[hook_ipc]
+enabled = true
+endpoint = "custom-endpoint"
+"#;
+        let cfg = XiConfig::from_toml_str(raw).expect("config with hook_ipc endpoint parses");
+        assert!(cfg.hook_ipc.enabled);
+        assert_eq!(cfg.hook_ipc.endpoint.as_deref(), Some("custom-endpoint"));
+        assert_eq!(cfg.hook_ipc.effective_endpoint(), "custom-endpoint");
+    }
+
+    #[test]
+    fn hook_ipc_defaults_disabled() {
+        let cfg = XiConfig::default();
+        assert!(!cfg.hook_ipc.enabled);
+        assert_eq!(cfg.hook_ipc.endpoint, None);
+        assert_eq!(
+            cfg.hook_ipc.effective_endpoint(),
+            HookIpcConfig::default_endpoint()
+        );
     }
 }

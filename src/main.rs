@@ -43,6 +43,7 @@ mod debug_log;
 mod dirs;
 mod event_log;
 mod export;
+mod hook_ipc;
 mod hooks;
 mod input;
 mod live_turn;
@@ -80,6 +81,7 @@ use app::App;
 use app_event::AppEvent;
 
 use config::XiConfig;
+use hook_ipc::HookIpcPublisherHandle;
 use llm::{LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture};
 use provider::{ThinkingSupport, build_provider_for_instance, thinking_support_for_instance};
 use provider_instance::AuthMode;
@@ -236,6 +238,7 @@ async fn main() -> io::Result<()> {
 
     let file_tracker = Arc::new(Mutex::new(build_file_tracker()));
     let tool_output_log = Arc::new(std::sync::Mutex::new(ToolOutputLog::new("init")));
+    let hook_ipc = HookIpcPublisherHandle::new(&config.hook_ipc);
 
     let mut app = App::new(
         initial_instance,
@@ -252,6 +255,7 @@ async fn main() -> io::Result<()> {
             executor: std::sync::Arc::new(crate::agent::DefaultToolExecutor::new()),
             system_prompt: None,
             hooks: config.hooks.clone(),
+            hook_ipc: hook_ipc.clone(),
             session_id: String::new(),
         },
         config.display.clone(),
@@ -988,6 +992,7 @@ async fn run_print_mode(
         executor: std::sync::Arc::new(crate::agent::DefaultToolExecutor::new()),
         system_prompt: Some(system_prompt),
         hooks: std::collections::HashMap::new(),
+        hook_ipc: HookIpcPublisherHandle::disabled(),
         session_id: String::new(),
     };
 
@@ -1190,6 +1195,7 @@ async fn run_print_mode_loop_inner(
         executor: std::sync::Arc::new(crate::agent::DefaultToolExecutor::new()),
         system_prompt,
         hooks: std::collections::HashMap::new(),
+        hook_ipc: HookIpcPublisherHandle::disabled(),
         session_id: String::new(),
     };
 

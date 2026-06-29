@@ -513,6 +513,8 @@ pub struct AgentLoopConfig {
     /// Agent-level hooks — user-defined commands that run at specific points
     /// in the agent loop (e.g. pre_tool, post_tool, pre_turn, post_turn, on_error).
     pub hooks: HashMap<crate::hooks::HookPoint, Vec<crate::hooks::HookConfig>>,
+    /// Best-effort process-wide IPC publisher for hook events.
+    pub hook_ipc: crate::hooks::HookIpcPublisherHandle,
     /// Persistent session identifier passed to hooks via environment variable.
     pub session_id: String,
 }

@@ -42,6 +42,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
+pub use crate::hook_ipc::{
+    HookIpcPublisherHandle, empty_payload, ipc_external_change_payload, ipc_on_error_payload,
+    ipc_pre_tool_payload, ipc_status_update_payload, ipc_tool_intent_payload,
+};
+
 // ── HookPoint ─────────────────────────────────────────────────────────────────
 
 /// The specific point in the agent loop where a hook fires.

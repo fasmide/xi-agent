@@ -1264,6 +1264,7 @@ mod tests {
                 executor: std::sync::Arc::new(crate::agent::DefaultToolExecutor::new()),
                 system_prompt: None,
                 hooks: std::collections::HashMap::new(),
+                hook_ipc: crate::hooks::HookIpcPublisherHandle::disabled(),
                 session_id: String::new(),
             },
             crate::config::DisplayConfig::default(),

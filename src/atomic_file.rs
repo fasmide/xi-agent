@@ -1,13 +1,24 @@
 /// Atomically write `content` to `path` by writing to a temporary file
-/// first and then renaming it into place.  The resulting file is
-/// owner-read/write only (0o600).
+/// first and then renaming it into place.
 pub fn save_atomic(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let mut tmp_path = path.to_path_buf();
     tmp_path.set_extension("tmp");
     std::fs::write(&tmp_path, content)?;
-    std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600))?;
+    set_secure_permissions(&tmp_path)?;
     std::fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_secure_permissions(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_secure_permissions(_path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
@@ -25,8 +36,10 @@ mod tests {
 
     #[test]
     fn save_atomic_failure_no_parent() {
-        let path = std::path::Path::new("/nonexistent_dir_12345/file");
-        assert!(save_atomic(path, "content").is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("not-a-dir").join("file");
+        std::fs::write(dir.path().join("not-a-dir"), "content").unwrap();
+        assert!(save_atomic(&path, "content").is_err());
     }
 
     #[test]

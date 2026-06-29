@@ -2640,6 +2640,9 @@ mod tests {
         app.session.session_state = Some(crate::session_state::SessionState::from_event_log(
             crate::event_log::EventLog::load(&path).expect("load event log"),
         ));
+        #[cfg(windows)]
+        app.shell.textarea.insert_str("Write-Output hello");
+        #[cfg(not(windows))]
         app.shell.textarea.insert_str("printf 'hello'");
 
         app.submit_shell_command();

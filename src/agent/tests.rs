@@ -942,11 +942,15 @@ async fn post_turn_hook_fires_after_final_answer() {
     use crate::hooks::{HookConfig, HookPoint};
     use std::collections::HashMap;
 
+    let hook_path =
+        std::env::temp_dir().join(format!("xi-hook-test-post-turn-{}.txt", std::process::id()));
+
     let mut hooks = HashMap::new();
     hooks.insert(
         HookPoint::PostTurn,
         vec![HookConfig {
-            bash: Some("echo 'HOOK OK' > /tmp/xi-hook-test-post-turn.txt".into()),
+            command: Some(post_turn_test_hook_program().into()),
+            args: post_turn_test_hook_args(&hook_path),
             ..Default::default()
         }],
     );
@@ -961,11 +965,38 @@ async fn post_turn_hook_fires_after_final_answer() {
 
     let _events = run_and_collect_with_config(provider, hooks).await;
 
-    // Check that the hook created the file
-    let content = std::fs::read_to_string("/tmp/xi-hook-test-post-turn.txt").unwrap_or_default();
+    let content = std::fs::read_to_string(&hook_path).unwrap_or_default();
     assert!(
         content.contains("HOOK OK"),
         "post_turn hook did not fire: content={content:?}"
     );
-    let _ = std::fs::remove_file("/tmp/xi-hook-test-post-turn.txt");
+    let _ = std::fs::remove_file(&hook_path);
+}
+
+#[cfg(unix)]
+fn post_turn_test_hook_program() -> &'static str {
+    "sh"
+}
+
+#[cfg(unix)]
+fn post_turn_test_hook_args(path: &std::path::Path) -> Vec<String> {
+    vec![
+        "-c".into(),
+        format!("printf 'HOOK OK' > '{}'", path.display()),
+    ]
+}
+
+#[cfg(windows)]
+fn post_turn_test_hook_program() -> &'static str {
+    "powershell.exe"
+}
+
+#[cfg(windows)]
+fn post_turn_test_hook_args(path: &std::path::Path) -> Vec<String> {
+    let escaped = path.display().to_string().replace('\'', "''");
+    vec![
+        "-NoProfile".into(),
+        "-Command".into(),
+        format!("Set-Content -Path '{escaped}' -Value 'HOOK OK'"),
+    ]
 }

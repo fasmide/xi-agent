@@ -7,7 +7,7 @@ use super::anthropic::AnthropicProvider;
 use super::codex::CodexProvider;
 use super::common::build_http_client;
 use super::openai::OpenAiProvider;
-use super::{LlmProvider, LlmStream, Message, ModelListFuture, ToolDefinition};
+use super::{LlmProvider, LlmRequestContext, LlmStream, Message, ModelListFuture, ToolDefinition};
 
 // ── Model metadata cache ──────────────────────────────────────────────────────
 
@@ -241,11 +241,11 @@ fn build_inner(
 }
 
 impl LlmProvider for CopilotProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
+    fn stream_chat(&self, messages: Vec<Message>, context: LlmRequestContext) -> LlmStream {
         match &self.inner {
-            CopilotInner::OpenAi(p) => p.stream_chat(messages),
-            CopilotInner::Anthropic(p) => p.stream_chat(messages),
-            CopilotInner::Codex(p) => p.stream_chat(messages),
+            CopilotInner::OpenAi(p) => p.stream_chat(messages, context.clone()),
+            CopilotInner::Anthropic(p) => p.stream_chat(messages, context.clone()),
+            CopilotInner::Codex(p) => p.stream_chat(messages, context),
         }
     }
 
@@ -253,11 +253,14 @@ impl LlmProvider for CopilotProvider {
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
+        context: LlmRequestContext,
     ) -> LlmStream {
         match &self.inner {
-            CopilotInner::OpenAi(p) => p.stream_chat_with_tools(messages, tools),
-            CopilotInner::Anthropic(p) => p.stream_chat_with_tools(messages, tools),
-            CopilotInner::Codex(p) => p.stream_chat_with_tools(messages, tools),
+            CopilotInner::OpenAi(p) => p.stream_chat_with_tools(messages, tools, context.clone()),
+            CopilotInner::Anthropic(p) => {
+                p.stream_chat_with_tools(messages, tools, context.clone())
+            }
+            CopilotInner::Codex(p) => p.stream_chat_with_tools(messages, tools, context),
         }
     }
 

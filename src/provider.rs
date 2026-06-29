@@ -123,15 +123,10 @@ pub fn thinking_support_for_instance(instance: &ProviderInstance, model: &str) -
 /// [`ApiType`].
 /// Build a provider for a named [`ProviderInstance`], dispatching on its
 /// [`ApiType`].
-///
-/// `session_id` — when `Some`, sets the `prompt_cache_key` on OpenAI-compatible
-/// backends so that requests for the same session are routed to the same cached-prefix
-/// server, improving cache hit rates across the lifetime of the session.
 pub fn build_provider_for_instance(
     instance: &ProviderInstance,
     thinking: ThinkingLevel,
     _config: &XiConfig,
-    session_id: Option<&str>,
 ) -> anyhow::Result<Arc<dyn LlmProvider + Send + Sync>> {
     let model = instance.effective_model();
 
@@ -142,19 +137,59 @@ pub fn build_provider_for_instance(
             let creds = store.get_copilot().ok_or_else(|| {
                 anyhow::anyhow!("Not authenticated for copilot. Run /login copilot.")
             })?;
+            let route = classify_copilot_route(model);
             log::debug!(
-                "provider route selected: instance={} model={} base_url={}",
+                "provider route selected: instance={} model={} base_url={} route={:?}",
                 instance.id,
                 model,
-                creds.base_url.as_deref().unwrap_or("<from-token>")
+                creds.base_url.as_deref().unwrap_or("<from-token>"),
+                route,
             );
-            let p = CopilotProvider::new(
-                &creds.access_token,
-                model,
-                creds.base_url.as_deref(),
-                thinking.to_reasoning_effort_string(),
-            );
-            Ok(Arc::new(p))
+            match route {
+                CopilotApiRoute::OpenAiResponses => {
+                    let base_url = creds.base_url.clone().unwrap_or_else(|| {
+                        crate::auth::copilot::extract_base_url(&creds.access_token)
+                            .unwrap_or_else(|| "https://api.githubcopilot.com".to_string())
+                    });
+                    let responses_url = format!("{}/v1/responses", base_url.trim_end_matches('/'));
+                    let p = CodexProvider::new_with_headers(
+                        responses_url,
+                        model,
+                        creds.access_token,
+                        vec![
+                            (
+                                "User-Agent".to_string(),
+                                "GitHubCopilotChat/0.35.0".to_string(),
+                            ),
+                            ("Editor-Version".to_string(), "vscode/1.107.0".to_string()),
+                            (
+                                "Editor-Plugin-Version".to_string(),
+                                "copilot-chat/0.35.0".to_string(),
+                            ),
+                            (
+                                "Copilot-Integration-Id".to_string(),
+                                "vscode-chat".to_string(),
+                            ),
+                            ("X-Initiator".to_string(), "user".to_string()),
+                            (
+                                "Openai-Intent".to_string(),
+                                "conversation-edits".to_string(),
+                            ),
+                        ],
+                    )
+                    .with_reasoning_effort(thinking.to_reasoning_effort_string());
+                    Ok(Arc::new(p))
+                }
+                _ => {
+                    let p = CopilotProvider::new(
+                        &creds.access_token,
+                        model,
+                        creds.base_url.as_deref(),
+                        thinking.to_reasoning_effort_string(),
+                    );
+                    Ok(Arc::new(p))
+                }
+            }
         }
         BackendPreset::Codex => {
             let store = AuthStore::load_default()?;
@@ -197,27 +232,19 @@ pub fn build_provider_for_instance(
             })?;
             let mut p = OpenAiProvider::new(base_url, model, api_key);
             log::debug!(
-                "provider build: id={} backend={:?} api={:?} thinking={:?} session_id={:?}",
+                "provider build: id={} backend={:?} api={:?} thinking={:?}",
                 instance.id,
                 instance.backend_preset,
                 instance.api_type,
                 thinking,
-                session_id,
             );
-            // Only send reasoning_effort and prompt_cache_key for OpenAI API;
-            // generic openai-compatible endpoints (e.g. DeepSeek) may reject them.
+            // Only send reasoning_effort for OpenAI API; generic
+            // openai-compatible endpoints (e.g. DeepSeek) may reject it.
             if instance.backend_preset == BackendPreset::OpenAi {
-                log::debug!(
-                    "provider build: enabling reasoning_effort+prompt_cache_key for OpenAi backend"
-                );
+                log::debug!("provider build: enabling reasoning_effort for OpenAi backend");
                 p = p.with_reasoning_effort(thinking.to_reasoning_effort_string());
-                if let Some(sid) = session_id {
-                    p = p.with_prompt_cache_key(sid);
-                }
             } else {
-                log::debug!(
-                    "provider build: skipping reasoning_effort+prompt_cache_key (backend is not OpenAi)"
-                );
+                log::debug!("provider build: skipping reasoning_effort (backend is not OpenAi)");
             }
             Ok(Arc::new(p))
         }
@@ -242,9 +269,6 @@ pub fn build_provider_for_instance(
                 ],
             );
             p = p.with_reasoning_effort(thinking.to_reasoning_effort_string());
-            if let Some(sid) = session_id {
-                p = p.with_prompt_cache_key(sid);
-            }
             Ok(Arc::new(p))
         }
 

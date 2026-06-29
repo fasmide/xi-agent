@@ -8,7 +8,10 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use async_stream::stream;
 use tokio::time::{Duration, sleep};
 
-use super::{AssistantPhase, LlmEvent, LlmStream, Message, ModelListFuture, Role, ToolDefinition};
+use super::{
+    AssistantPhase, LlmEvent, LlmRequestContext, LlmStream, Message, ModelListFuture, Role,
+    ToolDefinition,
+};
 use crate::llm::ProviderError;
 
 pub struct TestProvider {
@@ -789,14 +792,15 @@ impl TestProvider {
 }
 
 impl super::LlmProvider for TestProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
-        self.stream_chat_with_tools(messages, vec![])
+    fn stream_chat(&self, messages: Vec<Message>, context: LlmRequestContext) -> LlmStream {
+        self.stream_chat_with_tools(messages, vec![], context)
     }
 
     fn stream_chat_with_tools(
         &self,
         messages: Vec<Message>,
         _tools: Vec<ToolDefinition>,
+        _context: LlmRequestContext,
     ) -> LlmStream {
         // If a scripted sequence is in progress, advance it on every ToolResult.
         if let Some(last) = messages.last()
@@ -1112,7 +1116,10 @@ mod tests {
     async fn ask_context_command_emits_context_argument() {
         let provider = TestProvider::new();
         let events: Vec<LlmEvent> = provider
-            .stream_chat(vec![Message::user("ask-context")])
+            .stream_chat(
+                vec![Message::user("ask-context")],
+                LlmRequestContext::default(),
+            )
             .collect()
             .await;
 

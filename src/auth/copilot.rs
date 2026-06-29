@@ -193,7 +193,7 @@ pub async fn refresh(
     })
 }
 
-fn extract_base_url(token: &str) -> Option<String> {
+pub fn extract_base_url(token: &str) -> Option<String> {
     let domain = token
         .split(';')
         .find_map(|segment| segment.strip_prefix("proxy-ep="))?;

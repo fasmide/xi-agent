@@ -4,7 +4,7 @@ use std::sync::Arc;
 use futures_util::StreamExt;
 
 use crate::context_window::{context_window_for_model, scaled_token_budget};
-use crate::llm::{AssistantPhase, LlmEvent, LlmProvider, Message};
+use crate::llm::{AssistantPhase, LlmEvent, LlmProvider, LlmRequestContext, Message};
 use crate::projection::project_llm_messages;
 use crate::session_event::{CompactionTrigger, SessionEvent};
 
@@ -433,7 +433,12 @@ async fn collect_summary(
     provider: Arc<dyn LlmProvider>,
     messages: Vec<Message>,
 ) -> Result<String, crate::llm::ProviderError> {
-    let mut stream = provider.stream_chat(messages);
+    let mut stream = provider.stream_chat(
+        messages,
+        LlmRequestContext {
+            prompt_cache_key: None,
+        },
+    );
     let mut summary = String::new();
 
     while let Some(ev) = stream.next().await {

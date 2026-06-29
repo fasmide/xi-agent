@@ -173,20 +173,27 @@ pub async fn send_streaming_request(
 ) -> Result<reqwest::Response, super::ProviderError> {
     use super::ProviderError;
 
+    let start = std::time::Instant::now();
     let response = req
         .send()
         .await
         .map_err(|e| ProviderError::network(provider_name, format!("Failed to connect: {e}")))?;
+    let elapsed_ms = start.elapsed().as_millis();
 
     if !response.status().is_success() {
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         let preview: String = text.chars().take(1000).collect();
-        log::warn!("{provider_name} api error: status={status} body={preview}");
+        log::warn!(
+            "{provider_name} api error: status={status} connect_and_headers_ms={elapsed_ms} body={preview}"
+        );
         return Err(map_http_error(provider_name, status, text));
     }
 
-    log::debug!("← HTTP {} from {provider_name}", response.status());
+    log::debug!(
+        "← HTTP {} from {provider_name} connect_and_headers_ms={elapsed_ms}",
+        response.status()
+    );
     Ok(response)
 }
 

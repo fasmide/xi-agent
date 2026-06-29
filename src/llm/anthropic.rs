@@ -2,8 +2,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{
-    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ProviderError,
-    Role, ToolDefinition, UsageStats,
+    AssistantPhase, LlmEvent, LlmProvider, LlmRequestContext, LlmStream, Message, ModelListFuture,
+    ProviderError, Role, ToolDefinition, UsageStats,
     common::{
         StreamControl, build_http_client, infer_initiator, send_streaming_request, stream_sse_lines,
     },
@@ -452,7 +452,7 @@ fn build_usage_from_delta(
 // ── LlmProvider impl ──────────────────────────────────────────────────────────
 
 impl LlmProvider for AnthropicProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
+    fn stream_chat(&self, messages: Vec<Message>, _context: LlmRequestContext) -> LlmStream {
         self.stream_inner(messages, vec![])
     }
 
@@ -460,6 +460,7 @@ impl LlmProvider for AnthropicProvider {
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
+        _context: LlmRequestContext,
     ) -> LlmStream {
         self.stream_inner(messages, tools)
     }

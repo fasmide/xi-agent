@@ -4,8 +4,8 @@ use std::sync::{OnceLock, RwLock};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ProviderError,
-    ToolDefinition, UsageStats,
+    AssistantPhase, LlmEvent, LlmProvider, LlmRequestContext, LlmStream, Message, ModelListFuture,
+    ProviderError, ToolDefinition, UsageStats,
     common::{StreamControl, build_http_client, send_streaming_request, stream_ndjson_lines},
     provider_format::to_ollama_wire,
 };
@@ -264,7 +264,7 @@ fn parse_ndjson_line(line: &str, events: &mut Vec<LlmEvent>) -> bool {
 // ── Provider implementation ───────────────────────────────────────────────────
 
 impl LlmProvider for OllamaProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
+    fn stream_chat(&self, messages: Vec<Message>, _context: LlmRequestContext) -> LlmStream {
         let url = format!("{}/api/chat", self.base_url);
         let model = self.model.clone();
         let client = self.client.clone();
@@ -319,6 +319,7 @@ impl LlmProvider for OllamaProvider {
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
+        _context: LlmRequestContext,
     ) -> LlmStream {
         let url = format!("{}/api/chat", self.base_url);
         let model = self.model.clone();

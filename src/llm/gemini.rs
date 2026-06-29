@@ -2,8 +2,8 @@ use crate::thinking::GeminiThinkingLevel;
 use serde::Deserialize;
 
 use super::{
-    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ProviderError,
-    Role, ToolDefinition, UsageStats,
+    AssistantPhase, LlmEvent, LlmProvider, LlmRequestContext, LlmStream, Message, ModelListFuture,
+    ProviderError, Role, ToolDefinition, UsageStats,
     common::{StreamControl, build_http_client, stream_sse_lines},
     provider_format::to_gemini_wire,
 };
@@ -566,7 +566,7 @@ fn thinking_budget_for(level: GeminiThinkingLevel) -> usize {
 }
 
 impl LlmProvider for GeminiProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
+    fn stream_chat(&self, messages: Vec<Message>, _context: LlmRequestContext) -> LlmStream {
         self.stream_inner(messages, vec![])
     }
 
@@ -574,6 +574,7 @@ impl LlmProvider for GeminiProvider {
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
+        _context: LlmRequestContext,
     ) -> LlmStream {
         self.stream_inner(messages, tools)
     }

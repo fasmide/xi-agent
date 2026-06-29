@@ -2,8 +2,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{
-    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ProviderError,
-    Role, ToolDefinition, UsageStats,
+    AssistantPhase, LlmEvent, LlmProvider, LlmRequestContext, LlmStream, Message, ModelListFuture,
+    ProviderError, Role, ToolDefinition, UsageStats,
     common::{
         StreamControl, build_http_client, infer_initiator, send_streaming_request, stream_sse_lines,
     },
@@ -156,11 +156,17 @@ impl CodexProvider {
         self
     }
 
-    fn stream_inner(&self, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> LlmStream {
+    fn stream_inner(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+        context: LlmRequestContext,
+    ) -> LlmStream {
         let url = resolve_codex_url(&self.base_url);
         let model = self.model.clone();
         let api_key = self.api_key.clone();
         let extra_headers = self.extra_headers.clone();
+        let prompt_cache_key = context.prompt_cache_key.clone();
         let reasoning_effort = self.reasoning_effort.clone();
         let client = self.client.clone();
 
@@ -182,6 +188,10 @@ impl CodexProvider {
                 "tool_choice": "auto",
                 "parallel_tool_calls": true,
             });
+
+            if let Some(key) = &prompt_cache_key {
+                body["prompt_cache_key"] = serde_json::Value::String(key.clone());
+            }
 
             let explicit_reasoning = reasoning_effort
                 .as_deref()
@@ -222,6 +232,7 @@ impl CodexProvider {
                     "event": "llm_request",
                     "provider": "codex",
                     "payload": &body,
+                    "prompt_cache_key_present": prompt_cache_key.is_some(),
                 }),
             );
 
@@ -453,16 +464,17 @@ fn known_models() -> Vec<String> {
 // ── LlmProvider impl ──────────────────────────────────────────────────────────
 
 impl LlmProvider for CodexProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
-        self.stream_inner(messages, vec![])
+    fn stream_chat(&self, messages: Vec<Message>, context: LlmRequestContext) -> LlmStream {
+        self.stream_inner(messages, vec![], context)
     }
 
     fn stream_chat_with_tools(
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
+        context: LlmRequestContext,
     ) -> LlmStream {
-        self.stream_inner(messages, tools)
+        self.stream_inner(messages, tools, context)
     }
 
     fn list_models(&self) -> ModelListFuture {

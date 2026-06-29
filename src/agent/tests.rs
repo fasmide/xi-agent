@@ -9,8 +9,8 @@ use crate::agent::types::{AgentEvent, AskUserResponse, Tool};
 use crate::agent::{AgentLoopConfig, DefaultToolExecutor, run_agent_loop};
 use crate::app_event::AppEvent;
 use crate::llm::{
-    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ToolDefinition,
-    UsageStats,
+    AssistantPhase, LlmEvent, LlmProvider, LlmRequestContext, LlmStream, Message, ModelListFuture,
+    ToolDefinition, UsageStats,
 };
 
 // ── MockProvider ──────────────────────────────────────────────────────────────
@@ -30,14 +30,15 @@ impl MockProvider {
 }
 
 impl LlmProvider for MockProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
-        self.stream_chat_with_tools(messages, vec![])
+    fn stream_chat(&self, messages: Vec<Message>, context: LlmRequestContext) -> LlmStream {
+        self.stream_chat_with_tools(messages, vec![], context)
     }
 
     fn stream_chat_with_tools(
         &self,
         _messages: Vec<Message>,
         _tools: Vec<ToolDefinition>,
+        _context: LlmRequestContext,
     ) -> LlmStream {
         let events = self.turns.lock().unwrap().pop_front().unwrap_or_default();
         Box::pin(stream::iter(events))
@@ -63,14 +64,15 @@ impl DelayedMockProvider {
 }
 
 impl LlmProvider for DelayedMockProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
-        self.stream_chat_with_tools(messages, vec![])
+    fn stream_chat(&self, messages: Vec<Message>, context: LlmRequestContext) -> LlmStream {
+        self.stream_chat_with_tools(messages, vec![], context)
     }
 
     fn stream_chat_with_tools(
         &self,
         _messages: Vec<Message>,
         _tools: Vec<ToolDefinition>,
+        _context: LlmRequestContext,
     ) -> LlmStream {
         let events = self.turns.lock().unwrap().pop_front().unwrap_or_default();
         let delay = self.delay;
@@ -820,10 +822,15 @@ async fn agent_loop_pre_cancelled_exits_immediately() {
     // Provider would panic if called — any invocation means the test fails.
     struct PanicProvider;
     impl LlmProvider for PanicProvider {
-        fn stream_chat(&self, _: Vec<Message>) -> LlmStream {
+        fn stream_chat(&self, _: Vec<Message>, _: LlmRequestContext) -> LlmStream {
             panic!("LLM should not be called when pre-cancelled")
         }
-        fn stream_chat_with_tools(&self, _: Vec<Message>, _: Vec<ToolDefinition>) -> LlmStream {
+        fn stream_chat_with_tools(
+            &self,
+            _: Vec<Message>,
+            _: Vec<ToolDefinition>,
+            _: LlmRequestContext,
+        ) -> LlmStream {
             panic!("LLM should not be called when pre-cancelled")
         }
         fn list_models(&self) -> ModelListFuture {

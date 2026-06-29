@@ -9,7 +9,9 @@ use crate::hooks::{
     ipc_pre_tool_payload, ipc_status_update_payload, ipc_tool_intent_payload, maybe_run_hook,
     post_tool_json, tool_json,
 };
-use crate::llm::{AssistantPhase, LlmEvent, LlmProvider, Message, ToolDefinition, UsageStats};
+use crate::llm::{
+    AssistantPhase, LlmEvent, LlmProvider, LlmRequestContext, Message, ToolDefinition, UsageStats,
+};
 use crate::projection::LlmProjection;
 use crate::session_event::{CompactionTrigger, SessionEvent};
 use file_tracker::build_notification;
@@ -182,7 +184,13 @@ async fn stream_assistant_turn(
         .map(|t| (t.name.clone(), t.streaming_field.clone()))
         .collect();
 
-    let mut stream = provider.stream_chat_with_tools(messages, tool_defs);
+    let mut stream = provider.stream_chat_with_tools(
+        messages,
+        tool_defs,
+        LlmRequestContext {
+            prompt_cache_key: Some(hook_ctx.session_id.to_string()),
+        },
+    );
 
     let mut assistant_text = String::new();
     let mut assistant_thinking: Option<String> = None;

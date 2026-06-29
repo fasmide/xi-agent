@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AssistantPhase, LlmEvent, LlmProvider, LlmStream, Message, ModelListFuture, ProviderError,
-    ToolDefinition, UsageStats,
+    AssistantPhase, LlmEvent, LlmProvider, LlmRequestContext, LlmStream, Message, ModelListFuture,
+    ProviderError, ToolDefinition, UsageStats,
     common::{
         StreamControl, build_http_client, infer_initiator, send_streaming_request, stream_sse_lines,
     },
@@ -14,11 +14,6 @@ pub struct OpenAiProvider {
     model: String,
     api_key: String,
     extra_headers: Vec<(String, String)>,
-    /// Optional stable key used to influence OpenAI prompt-cache routing.
-    /// When set, the value is sent as `prompt_cache_key` in every request,
-    /// which helps the API route to the same machine that already cached the
-    /// prompt prefix for this session.
-    prompt_cache_key: Option<String>,
     /// Optional reasoning effort level (e.g. "low", "medium", "high") sent
     /// as `reasoning_effort` in the request body.  Only meaningful for
     /// models that support reasoning/thinking (e.g. DeepSeek-R1, o-series).
@@ -46,21 +41,9 @@ impl OpenAiProvider {
             model: model.into(),
             api_key: api_key.into(),
             extra_headers,
-            prompt_cache_key: None,
             reasoning_effort: None,
             client: build_http_client(),
         }
-    }
-
-    /// Set a stable `prompt_cache_key` for this provider instance.
-    ///
-    /// The key is sent with every request to help OpenAI route requests to the
-    /// same server that already holds the cached prompt prefix, improving cache
-    /// hit rates.  A session ID is a good choice — it is stable across
-    /// restarts of the application for the same session file.
-    pub fn with_prompt_cache_key(mut self, key: impl Into<String>) -> Self {
-        self.prompt_cache_key = Some(key.into());
-        self
     }
 
     /// Set a reasoning effort level for this provider instance.
@@ -73,12 +56,17 @@ impl OpenAiProvider {
         self
     }
 
-    fn stream_inner(&self, messages: Vec<Message>, tools: Vec<ToolDefinition>) -> LlmStream {
+    fn stream_inner(
+        &self,
+        messages: Vec<Message>,
+        tools: Vec<ToolDefinition>,
+        context: LlmRequestContext,
+    ) -> LlmStream {
         let url = format!("{}/chat/completions", self.base_url);
         let model = self.model.clone();
         let api_key = self.api_key.clone();
         let extra_headers = self.extra_headers.clone();
-        let prompt_cache_key = self.prompt_cache_key.clone();
+        let prompt_cache_key = context.prompt_cache_key.clone();
         let reasoning_effort = self.reasoning_effort.clone();
         let client = self.client.clone();
 
@@ -376,16 +364,17 @@ fn to_oai_tool(tool: &ToolDefinition) -> OaiToolDef {
 // ── LlmProvider impl ──────────────────────────────────────────────────────────
 
 impl LlmProvider for OpenAiProvider {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream {
-        self.stream_inner(messages, vec![])
+    fn stream_chat(&self, messages: Vec<Message>, context: LlmRequestContext) -> LlmStream {
+        self.stream_inner(messages, vec![], context)
     }
 
     fn stream_chat_with_tools(
         &self,
         messages: Vec<Message>,
         tools: Vec<ToolDefinition>,
+        context: LlmRequestContext,
     ) -> LlmStream {
-        self.stream_inner(messages, tools)
+        self.stream_inner(messages, tools, context)
     }
 
     fn list_models(&self) -> ModelListFuture {

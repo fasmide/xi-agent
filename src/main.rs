@@ -301,7 +301,6 @@ async fn main() -> io::Result<()> {
                 &app.provider.current_instance,
                 app.provider.current_thinking,
                 &config,
-                app.session.current_session_id.as_deref(),
             ) {
                 Ok(p) => p,
                 Err(e) => {
@@ -630,7 +629,7 @@ struct UnavailableProvider {
 }
 
 impl LlmProvider for UnavailableProvider {
-    fn stream_chat(&self, _messages: Vec<Message>) -> LlmStream {
+    fn stream_chat(&self, _messages: Vec<Message>, _context: llm::LlmRequestContext) -> LlmStream {
         let msg = self.message.clone();
         Box::pin(async_stream::stream! {
             yield LlmEvent::Error(llm::ProviderError::other("unavailable", msg));
@@ -641,8 +640,9 @@ impl LlmProvider for UnavailableProvider {
         &self,
         _messages: Vec<Message>,
         _tools: Vec<llm::ToolDefinition>,
+        _context: llm::LlmRequestContext,
     ) -> LlmStream {
-        self.stream_chat(vec![])
+        self.stream_chat(vec![], llm::LlmRequestContext::default())
     }
 
     fn list_models(&self) -> ModelListFuture {
@@ -957,7 +957,7 @@ async fn run_print_mode(
     // that build_provider reads fresh credentials from the auth store.
     preflight_token_refresh(&provider_name).await;
 
-    let provider = build_provider_for_instance(&resolved_instance, current_thinking, config, None)
+    let provider = build_provider_for_instance(&resolved_instance, current_thinking, config)
         .map_err(|e| io::Error::other(format!("provider error: {e}")))?;
 
     let custom_tools = load_custom_tools(&custom_tool_dirs());
@@ -1113,7 +1113,6 @@ async fn run_print_mode_loop(
                                 ctx.instance,
                                 ctx.thinking,
                                 ctx.xi_config,
-                                None,
                             ) {
                                 Ok(new_provider) => {
                                     // Run the loop a second time with the refreshed provider.

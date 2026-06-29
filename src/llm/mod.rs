@@ -322,8 +322,18 @@ pub type ModelListFuture =
 /// `stream_chat` returns an `LlmStream` rather than accepting a channel
 /// sender. This decouples the trait from any specific async runtime primitive
 /// and makes implementors independently testable by collecting the stream.
+/// Session-owned request context supplied at send time.
+///
+/// This keeps stable session identity out of long-lived provider instances
+/// while still letting a request carry provider-specific routing hints such as
+/// `prompt_cache_key`.
+#[derive(Debug, Clone, Default)]
+pub struct LlmRequestContext {
+    pub prompt_cache_key: Option<String>,
+}
+
 pub trait LlmProvider: Send + Sync {
-    fn stream_chat(&self, messages: Vec<Message>) -> LlmStream;
+    fn stream_chat(&self, messages: Vec<Message>, context: LlmRequestContext) -> LlmStream;
 
     /// Stream a chat request with tool schemas available to the model.
     ///
@@ -336,8 +346,9 @@ pub trait LlmProvider: Send + Sync {
         &self,
         messages: Vec<Message>,
         _tools: Vec<ToolDefinition>,
+        context: LlmRequestContext,
     ) -> LlmStream {
-        self.stream_chat(messages)
+        self.stream_chat(messages, context)
     }
 
     /// Return the list of model names available from this provider.

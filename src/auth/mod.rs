@@ -68,6 +68,16 @@ pub async fn login_provider(
     cancel: Arc<AtomicBool>,
     backend: Arc<dyn OAuthBackend>,
 ) {
+    login_provider_inner(provider, tx, cancel, backend, None).await;
+}
+
+async fn login_provider_inner(
+    provider: &str,
+    tx: AppEventTx,
+    cancel: Arc<AtomicBool>,
+    backend: Arc<dyn OAuthBackend>,
+    auth_path: Option<&std::path::Path>,
+) {
     log::debug!("login_provider called: provider={provider}");
     let _ = tx.send(AppEvent::Login(LoginEvent::Info(format!(
         "Starting login for {provider}..."
@@ -86,7 +96,10 @@ pub async fn login_provider(
 
     // On success, persist the returned ProviderCredentials to the store.
     let result = login_result.map(|creds| {
-        let mut store = AuthStore::load_default()?;
+        let mut store = match auth_path {
+            Some(path) => AuthStore::load(path),
+            None => AuthStore::load_default(),
+        }?;
         store.set_from_credentials(creds);
         store.save()
     });
@@ -309,41 +322,16 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::mpsc::unbounded_channel;
 
-    /// Override the auth file path for the duration of a test.
-    struct AuthPathOverride {
-        _tmp: TempDir,
-    }
-
-    impl AuthPathOverride {
-        fn new() -> Self {
-            let tmp = TempDir::new().unwrap();
-            let path = tmp.path().join("auth.toml");
-            // SAFETY: single-threaded test, no concurrent env access.
-            unsafe {
-                std::env::set_var("XI_AUTH_FILE", path.to_str().unwrap());
-            }
-            Self { _tmp: tmp }
-        }
-    }
-
-    impl Drop for AuthPathOverride {
-        fn drop(&mut self) {
-            // SAFETY: single-threaded test, no concurrent env access.
-            unsafe {
-                std::env::remove_var("XI_AUTH_FILE");
-            }
-        }
-    }
-
     #[tokio::test]
     async fn login_provider_success_emits_event_sequence() {
-        let _override = AuthPathOverride::new();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
         let mock = Arc::new(MockOAuthBackend::new().expect_login(Ok(fake_copilot_creds())));
 
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let cancel = Arc::new(AtomicBool::new(false));
 
-        login_provider("copilot", tx, cancel, mock).await;
+        login_provider_inner("copilot", tx, cancel, mock, Some(&path)).await;
 
         // Drain events
         let events: Vec<LoginEvent> = std::iter::from_fn(|| {
@@ -378,7 +366,7 @@ mod tests {
         );
 
         // Verify credentials were persisted
-        let store = AuthStore::load_default().unwrap();
+        let store = AuthStore::load(&path).unwrap();
         assert!(
             store.get_copilot().is_some(),
             "credentials should be persisted"
@@ -387,7 +375,8 @@ mod tests {
 
     #[tokio::test]
     async fn login_provider_error_emits_error_event() {
-        let _override = AuthPathOverride::new();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
         let mock = Arc::new(
             MockOAuthBackend::new().expect_login(Err(anyhow::anyhow!("provider rejected"))),
         );
@@ -395,7 +384,7 @@ mod tests {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let cancel = Arc::new(AtomicBool::new(false));
 
-        login_provider("copilot", tx, cancel, mock).await;
+        login_provider_inner("copilot", tx, cancel, mock, Some(&path)).await;
 
         let events: Vec<LoginEvent> = std::iter::from_fn(|| {
             rx.try_recv().ok().map(|e| match e {
@@ -419,14 +408,15 @@ mod tests {
 
     #[tokio::test]
     async fn login_provider_cancelled_emits_cancelled_error() {
-        let _override = AuthPathOverride::new();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
         let mock =
             Arc::new(MockOAuthBackend::new().expect_login(Err(anyhow::anyhow!("Login cancelled"))));
 
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let cancel = Arc::new(AtomicBool::new(true)); // already cancelled
 
-        login_provider("copilot", tx, cancel, mock).await;
+        login_provider_inner("copilot", tx, cancel, mock, Some(&path)).await;
 
         let events: Vec<LoginEvent> = std::iter::from_fn(|| {
             rx.try_recv().ok().map(|e| match e {

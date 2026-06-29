@@ -361,4 +361,18 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, "hello world");
     }
+
+    #[test]
+    fn load_parse_error_does_not_clobber_existing_file_on_save_attempt() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("auth.toml");
+        let original = "not valid toml = [";
+        std::fs::write(&path, original).unwrap();
+
+        let result = AuthStore::load(&path);
+        assert!(result.is_err(), "load should fail for invalid TOML");
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(after, original, "invalid auth file must remain untouched");
+    }
 }

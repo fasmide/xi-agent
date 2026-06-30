@@ -430,12 +430,17 @@ impl App {
         self.session.live_turn.notices.clear();
 
         let items = if let Some(store) = self.session.session_store.as_ref() {
+            let current_folder = std::path::Path::new(&self.session.current_cwd)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+
             let mut sessions = store.list_sessions();
             sessions.sort_by(|a, b| {
-                let a_local = a.cwd == self.session.current_cwd;
-                let b_local = b.cwd == self.session.current_cwd;
-                b_local
-                    .cmp(&a_local)
+                let a_scope = session_scope(&a.cwd, &self.session.current_cwd, current_folder);
+                let b_scope = session_scope(&b.cwd, &self.session.current_cwd, current_folder);
+                a_scope
+                    .cmp(&b_scope)
                     .then_with(|| b.updated_at_ms.cmp(&a.updated_at_ms))
             });
 
@@ -452,8 +457,11 @@ impl App {
                 sessions
                     .iter()
                     .map(|meta| {
-                        let is_local = meta.cwd == self.session.current_cwd;
-                        let scope = if is_local { "local" } else { "foreign" };
+                        let scope = session_scope_label(
+                            &meta.cwd,
+                            &self.session.current_cwd,
+                            current_folder,
+                        );
                         let when = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
                             meta.updated_at_ms,
                         )
@@ -1225,6 +1233,39 @@ fn trim_incomplete_turn(events: &mut Vec<SessionEvent>) {
             }
             _ => {}
         }
+    }
+}
+
+/// Return a sort key for session scope: 0 = local, 1 = similar, 2 = foreign.
+fn session_scope(session_cwd: &str, current_cwd: &str, current_folder: &str) -> u8 {
+    if session_cwd == current_cwd {
+        0 // local
+    } else if !current_folder.is_empty() && folder_name(session_cwd) == Some(current_folder) {
+        1 // similar
+    } else {
+        2 // foreign
+    }
+}
+
+/// Return a human-readable scope label for a session.
+fn session_scope_label(session_cwd: &str, current_cwd: &str, current_folder: &str) -> &'static str {
+    if session_cwd == current_cwd {
+        "local"
+    } else if !current_folder.is_empty() && folder_name(session_cwd) == Some(current_folder) {
+        "similar"
+    } else {
+        "foreign"
+    }
+}
+
+/// Extract the final path component as `Some(&str)`, or `None` for empty/"." paths.
+fn folder_name(path: &str) -> Option<&str> {
+    let p = std::path::Path::new(path);
+    let name = p.file_name()?.to_str()?;
+    if name.is_empty() || name == "." || name == ".." {
+        None
+    } else {
+        Some(name)
     }
 }
 

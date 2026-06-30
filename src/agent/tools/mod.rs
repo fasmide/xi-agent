@@ -90,7 +90,24 @@ fn describe_want(raw: &str) -> String {
         "a boolean" | "bool" => "a boolean".to_string(),
         "a sequence" => "an array".to_string(),
         "a map" => "an object".to_string(),
-        other => other.to_string(),
+        // Rust compound type names — map to JSON concepts.
+        "struct variant" | "newtype variant" | "unit variant" | "tuple variant" => {
+            "an object".to_string()
+        }
+        other => {
+            if other.starts_with("struct ")
+                || other.starts_with("enum ")
+                || other.starts_with("newtype struct ")
+            {
+                "an object".to_string()
+            } else if other.starts_with("tuple struct ") {
+                "an array".to_string()
+            } else if other.starts_with("unit struct ") {
+                "null".to_string()
+            } else {
+                other.to_string()
+            }
+        }
     }
 }
 
@@ -437,5 +454,44 @@ mod tests {
     fn translate_unknown_message_returns_none() {
         let r = translate_serde_message("some future serde error format we don't know about");
         assert_eq!(r, None);
+    }
+
+    #[test]
+    fn translate_null_for_struct() {
+        let r = translate_serde_message("invalid type: null, expected struct ExecArgs");
+        assert_eq!(r, Some("expected an object, got null".to_string()));
+    }
+
+    #[test]
+    fn translate_string_for_struct() {
+        let r = translate_serde_message("invalid type: string \"hi\", expected struct BashArgs");
+        assert_eq!(r, Some("expected an object, got string \"hi\"".to_string()));
+    }
+
+    #[test]
+    fn translate_array_for_struct() {
+        let r = translate_serde_message("invalid type: sequence, expected struct Foo");
+        assert_eq!(r, Some("expected an object, got an array".to_string()));
+    }
+
+    #[test]
+    fn translate_enum_variant_patterns() {
+        let r = translate_serde_message("invalid type: null, expected struct variant");
+        assert_eq!(r, Some("expected an object, got null".to_string()));
+        let r = translate_serde_message("invalid type: null, expected newtype variant");
+        assert_eq!(r, Some("expected an object, got null".to_string()));
+    }
+
+    #[test]
+    fn parse_args_null_for_struct_gives_friendly_error() {
+        #[derive(Debug, Deserialize)]
+        struct Args {
+            _field: Option<String>,
+        }
+        let msg = err_content::<Args>(serde_json::Value::Null);
+        assert!(
+            msg.contains("expected an object, got null"),
+            "unfriendly error: {msg}"
+        );
     }
 }

@@ -138,6 +138,14 @@ pub fn build_provider_for_instance(
                 anyhow::anyhow!("Not authenticated for copilot. Run /login copilot.")
             })?;
             let route = classify_copilot_route(model);
+            let auth_token = crate::auth::copilot::copilot_auth_token(&creds.access_token);
+            log::debug!(
+                "copilot auth in build_provider: raw_len={} stripped_len={} has_semi={} first_12={}",
+                creds.access_token.len(),
+                auth_token.len(),
+                creds.access_token.contains(';'),
+                &creds.access_token[..creds.access_token.len().min(12)],
+            );
             log::debug!(
                 "provider route selected: instance={} model={} base_url={} route={:?}",
                 instance.id,
@@ -155,7 +163,7 @@ pub fn build_provider_for_instance(
                     let p = CodexProvider::new_with_headers(
                         responses_url,
                         model,
-                        creds.access_token,
+                        auth_token,
                         vec![
                             (
                                 "User-Agent".to_string(),
@@ -182,7 +190,7 @@ pub fn build_provider_for_instance(
                 }
                 _ => {
                     let p = CopilotProvider::new(
-                        &creds.access_token,
+                        auth_token,
                         model,
                         creds.base_url.as_deref(),
                         thinking.to_reasoning_effort_string(),

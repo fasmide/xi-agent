@@ -205,9 +205,33 @@ pub fn extract_base_url(token: &str) -> Option<String> {
     Some(format!("https://{api_domain}"))
 }
 
+/// Strip Copilot token metadata (everything from the first `;` onward),
+/// leaving only the JWT suitable for use as a Bearer token in an
+/// `Authorization` header.
+///
+/// Copilot access tokens have the form `jwt;proxy-ep=host` where the
+/// semicolon-delimited suffix carries proxy routing metadata.  Passing
+/// the full string to `Authorization: Bearer …` results in a 400 error
+/// ("Authorization header is badly formatted").  Callers must use the
+/// return value of this function for all Bearer-auth purposes.
+pub fn copilot_auth_token(token: &str) -> &str {
+    token.split(';').next().unwrap_or(token)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extract_base_url;
+    use super::{copilot_auth_token, extract_base_url};
+
+    #[test]
+    fn copilot_auth_token_strips_metadata() {
+        let token = "eyJhbGciOiJSUzI1NiJ9.abc;proxy-ep=proxy.business.githubcopilot.com;other=val";
+        assert_eq!(copilot_auth_token(token), "eyJhbGciOiJSUzI1NiJ9.abc");
+    }
+
+    #[test]
+    fn copilot_auth_token_passthrough_when_no_metadata() {
+        assert_eq!(copilot_auth_token("plain-jwt"), "plain-jwt");
+    }
 
     #[test]
     fn extract_base_url_maps_proxy_prefix_to_api_subdomain() {

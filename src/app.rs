@@ -101,6 +101,8 @@ pub struct App {
     /// Shell mode state (textarea, selected shell, available shells).
     pub(crate) shell: ShellState,
     pub(crate) input_mode: InputMode,
+    /// Vertical scroll offset for the input panel (in wrapped lines).
+    pub(crate) input_scroll: usize,
     /// Log pane scroll and cache state.
     pub(crate) log_view: LogViewState,
     /// Active agent turn state: streaming status, throbber tick, last output time.
@@ -169,6 +171,7 @@ impl App {
             textarea: Self::make_textarea(),
             shell: ShellState::new(),
             input_mode: InputMode::Chat,
+            input_scroll: 0,
             log_view: LogViewState::new(),
             agent_turn: AgentTurnState::new(),
             provider: ProviderManager::new(initial_instance, initial_model, initial_thinking),

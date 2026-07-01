@@ -255,7 +255,12 @@ pub(super) fn split_scrollbar_column(area: Rect) -> (Rect, Option<Rect>) {
     }
 }
 
-pub(super) fn render_input_panel(f: &mut ratatui::Frame, area: Rect, app: &App, panel_bg: Color) {
+pub(super) fn render_input_panel(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    app: &mut App,
+    panel_bg: Color,
+) {
     let is_shell = app.input_mode == InputMode::Shell;
     let input_width = area.width as usize;
 
@@ -314,11 +319,30 @@ pub(super) fn render_input_panel(f: &mut ratatui::Frame, area: Rect, app: &App, 
     let wrapped_lines = wrapped.lines;
     let wrapped_cursor = wrapped.cursor;
 
-    let mut lines: Vec<Line<'static>> = wrapped_lines
+    // ── Viewport scrolling ────────────────────────────────────────────────
+    let viewport_h = area.height as usize;
+    let total = wrapped_lines.len().max(1);
+
+    // Keep scroll in bounds and follow the cursor.
+    app.input_scroll = app.input_scroll.min(total.saturating_sub(viewport_h));
+    if wrapped_cursor.0 < app.input_scroll {
+        app.input_scroll = wrapped_cursor.0;
+    } else if wrapped_cursor.0 >= app.input_scroll + viewport_h {
+        app.input_scroll = wrapped_cursor
+            .0
+            .saturating_sub(viewport_h.saturating_sub(1));
+    }
+
+    let scroll = app.input_scroll;
+    let visible_end = (scroll + viewport_h).min(total);
+    let visible_lines: Vec<String> = wrapped_lines[scroll..visible_end].to_vec();
+
+    let mut lines: Vec<Line<'static>> = visible_lines
         .into_iter()
         .enumerate()
-        .map(|(idx, row)| {
-            if idx == 0 && !prefix.is_empty() {
+        .map(|(i, row)| {
+            let abs_idx = scroll + i;
+            if abs_idx == 0 && !prefix.is_empty() {
                 Line::from(vec![
                     Span::styled(
                         prefix.clone(),
@@ -344,7 +368,9 @@ pub(super) fn render_input_panel(f: &mut ratatui::Frame, area: Rect, app: &App, 
         })
         .collect();
 
-    if lines.is_empty() {
+    // When the visible slice is empty or the first visible line is scrolled
+    // past the prefix line, still show the prefix on a lone empty line.
+    if lines.is_empty() && !prefix.is_empty() {
         lines.push(Line::from(Span::styled(
             prefix.clone(),
             Style::default()
@@ -358,6 +384,8 @@ pub(super) fn render_input_panel(f: &mut ratatui::Frame, area: Rect, app: &App, 
                     .unwrap_or(Color::Cyan))
                 .bg(panel_bg),
         )));
+    } else if lines.is_empty() {
+        lines.push(Line::default());
     }
 
     if let Some(hint) = hint {
@@ -391,6 +419,8 @@ pub(super) fn render_input_panel(f: &mut ratatui::Frame, area: Rect, app: &App, 
     let cursor_x = area
         .x
         .saturating_add((wrapped_cursor.1 + prefix.width()) as u16);
-    let cursor_y = area.y.saturating_add(wrapped_cursor.0 as u16);
+    let cursor_y = area
+        .y
+        .saturating_add((wrapped_cursor.0.saturating_sub(scroll)) as u16);
     f.set_cursor_position((cursor_x, cursor_y));
 }

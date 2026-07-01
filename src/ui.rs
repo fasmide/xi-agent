@@ -1796,6 +1796,65 @@ mod tests {
     }
 
     #[test]
+    fn input_panel_scrolls_when_text_exceeds_viewport() {
+        let mut app = make_app();
+        // Insert 20 short lines — no wrapping, but they exceed the input
+        // panel height (capped at 40% of terminal = ~9 rows in 24-row term).
+        for i in 1..=20 {
+            app.textarea.insert_str(format!("Line {i}\n"));
+        }
+        // Render into a typical terminal. Input height = min(20, 24*40%) = 9.
+        render_to_plain_lines(&mut app, 80, 24);
+
+        assert!(
+            app.input_scroll > 0,
+            "input_scroll should be > 0 when 20 lines exceed ~9-line viewport, got {}",
+            app.input_scroll
+        );
+    }
+
+    #[test]
+    fn input_panel_last_line_shows_cursor_line_when_scrolled() {
+        let mut app = make_app();
+        for i in 1..=20 {
+            app.textarea.insert_str(format!("Line {i}\n"));
+        }
+        let buf = render_to_buffer(&mut app, 80, 24);
+
+        let input_rows: Vec<(u16, String)> = (0..24u16)
+            .filter_map(|y| {
+                let row_text: String = (0..80u16)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string();
+                if row_text.contains("Line ") && !row_text.contains("💬") {
+                    Some((y, row_text))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            !input_rows.is_empty(),
+            "expected to find input lines containing 'Line '"
+        );
+
+        let last_input_row = input_rows.last().unwrap();
+        assert!(
+            !last_input_row.1.contains("Line 1"),
+            "last visible input row should not be 'Line 1' when scrolled down; got: {}",
+            last_input_row.1
+        );
+        assert!(
+            last_input_row.1.contains("Line ") && !last_input_row.1.contains("Line 1"),
+            "last visible input row should show a scrolled-to line number (not Line 1); got: {}",
+            last_input_row.1
+        );
+    }
+
+    #[test]
     fn ask_user_freeform_typing_uses_ask_user_input_bg() {
         use crate::agent::types::{AskRequest, AskUserOption, AskUserResponse};
         let mut app = make_app();

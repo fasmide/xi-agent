@@ -24,7 +24,7 @@
 //! ## Lifecycle
 //! - `assistant_content`, `assistant_thinking`, `assistant_phase`, and
 //!   `tool_entries` are cleared at each turn boundary (after `flush_turn_events`).
-//! - `notices` persist until the next `new_conversation` reset — they survive
+//! - `notices` persist until the next `clear_session_state` reset — they survive
 //!   turn boundaries because they are user-visible session-level feedback.
 
 use crate::llm::{AssistantPhase, DisplayRange, Message};
@@ -73,7 +73,7 @@ pub struct LiveTurnState {
     pub tool_entries: Vec<LiveToolEntry>,
     /// UI-only notices (errors, export confirmations, warnings).
     /// Not backed by `SessionEvent`; never forwarded to the LLM.
-    /// Persist across turn boundaries until `new_conversation`.
+    /// Persist across turn boundaries until `clear_session_state`.
     pub notices: Vec<Message>,
 }
 
@@ -103,7 +103,7 @@ impl LiveTurnState {
         self.tool_entries.clear();
     }
 
-    /// Clear everything including notices (called on `new_conversation`).
+    /// Clear everything including notices (called on `clear_session_state`).
     pub fn clear_all(&mut self) {
         self.clear_turn();
         self.notices.clear();

@@ -363,6 +363,41 @@ async fn main() -> io::Result<()> {
                 app.completion.available_models = None;
             }
 
+            Ok(RunResult::NewSession) => {
+                // Reset the file tracker so changes from the previous session
+                // are not detected as external modifications.
+                file_tracker.lock().unwrap().reset();
+
+                // Clear all session state (conversation history, input, etc.).
+                app.clear_session_state();
+
+                // Reload skills, custom tools, and rebuild the system prompt —
+                // same as a full xi restart.
+                let custom_tools = load_custom_tools(&custom_tool_dirs());
+                let custom_count = custom_tools.len();
+                let loaded_skills = Arc::new(skills::load_skills());
+                let tools = register_builtin_tools(
+                    Some(app_event_tx.clone()),
+                    Arc::clone(&file_tracker),
+                    Arc::clone(&loaded_skills),
+                    custom_tools,
+                )
+                .await;
+                let system_prompt = build_system_prompt(&tools, &cwd, &loaded_skills);
+                let skills_count = loaded_skills.len();
+                app.agent_config.tools = tools;
+                app.agent_config.system_prompt = Some(system_prompt);
+                app.loaded_skills = (*loaded_skills).clone();
+                app.push_notice(Message::assistant(format!(
+                    "[new session: {} skill{}, {} custom tool{}]",
+                    skills_count,
+                    if skills_count == 1 { "" } else { "s" },
+                    custom_count,
+                    if custom_count == 1 { "" } else { "s" },
+                )));
+                app.completion.available_models = None;
+            }
+
             Ok(RunResult::ChangeModel {
                 name,
                 prompt_thinking_selection,

@@ -19,6 +19,9 @@ pub(crate) enum RunResult {
     Quit,
     RebuildProvider,
     ReloadContext,
+    /// Start a fresh session: clear session state, reset the file tracker,
+    /// and reload skills/tools/system-prompt.
+    NewSession,
     ChangeModel {
         name: String,
         prompt_thinking_selection: bool,
@@ -711,7 +714,7 @@ fn handle_slash_submit(
     app.reset_textarea();
 
     match crate::commands::parse(&input) {
-        Some(CommandAction::New) => app.new_conversation(),
+        Some(CommandAction::New) => return KeyDispatch::Return(RunResult::NewSession),
         Some(CommandAction::Export(path)) => app.export_session_html(path.as_deref()),
         Some(CommandAction::Reload) => return KeyDispatch::Return(RunResult::ReloadContext),
         Some(CommandAction::Quit) => return KeyDispatch::Return(RunResult::Quit),

@@ -1029,7 +1029,7 @@ impl App {
     }
 
     /// Clear the conversation history and reset the input area.
-    pub fn new_conversation(&mut self) {
+    pub fn clear_session_state(&mut self) {
         self.session.current_session_id = None;
         self.session.session_state = None;
         self.session.live_turn.clear_all();

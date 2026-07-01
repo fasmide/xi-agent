@@ -106,6 +106,14 @@ impl FileTracker {
         }
     }
 
+    /// Discard all tracked file snapshots.
+    ///
+    /// Call this when starting a new session so that file changes from the
+    /// previous session are not detected as external modifications.
+    pub fn reset(&mut self) {
+        self.files.clear();
+    }
+
     /// Absorb any file changes that occurred since the last snapshot without
     /// reporting them as external modifications.
     ///

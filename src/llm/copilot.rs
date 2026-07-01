@@ -1,5 +1,3 @@
-use crate::auth::copilot::copilot_auth_token;
-
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
@@ -95,20 +93,18 @@ async fn fetch_and_cache_models(
     let url = format!("{}/models", base_url.trim_end_matches('/'));
     let client = build_http_client();
 
-    let stripped = copilot_auth_token(&access_token);
     log::debug!(
-        "fetch_and_cache_models: raw_len={} stripped_len={} has_semi={} first_8={}",
+        "fetch_and_cache_models: token_len={} has_semi={} first_12={}",
         access_token.len(),
-        stripped.len(),
         access_token.contains(';'),
-        &access_token[..access_token.len().min(8)],
+        &access_token[..access_token.len().min(12)],
     );
 
     super::common::fetch_model_list::<ApiModelsResponse, _>(
         &client,
         &url,
         "Copilot",
-        Some(stripped),
+        Some(&access_token),
         &extra_headers,
         |parsed| {
             // Populate the metadata cache as a side-effect of parsing.
@@ -168,23 +164,18 @@ impl CopilotProvider {
             .map(|s| s.to_string())
             .unwrap_or_else(|| extract_base_url(access_token));
 
-        // Strip Copilot token metadata (;proxy-ep=…) before using it
-        // as a Bearer token.  The full token is only valid for
-        // extract_base_url above; everything else needs the clean JWT.
-        let auth_token = copilot_auth_token(access_token);
         log::debug!(
-            "copilot auth token: raw_len={} stripped_len={} has_semi={} first_8={}",
+            "copilot auth token: len={} has_semi={} first_12={}",
             access_token.len(),
-            auth_token.len(),
             access_token.contains(';'),
-            &access_token[..access_token.len().min(8)],
+            &access_token[..access_token.len().min(12)],
         );
-        let inner = build_inner(model, auth_token, &resolved_base_url, reasoning_effort);
+        let inner = build_inner(model, access_token, &resolved_base_url, reasoning_effort);
 
         Self {
             inner,
             base_url: resolved_base_url,
-            access_token: auth_token.to_string(),
+            access_token: access_token.to_string(),
         }
     }
 

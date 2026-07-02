@@ -2059,7 +2059,8 @@ mod tests {
             })
             .collect();
         assert!(
-            text.iter().any(|t| t.contains("Summary: we found the bug.")),
+            text.iter()
+                .any(|t| t.contains("Summary: we found the bug.")),
             "context from partial_snapshot should be visible in the log:\n{}",
             text.join("\n")
         );

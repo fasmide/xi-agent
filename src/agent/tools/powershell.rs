@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use std::path::Path;
 use std::pin::Pin;
 
 use serde_json::Value;
@@ -18,7 +20,7 @@ impl Tool for PowerShellTool {
     }
 
     fn description(&self) -> &str {
-        "Run a command via `powershell.exe -NoProfile -Command` and return compact output. \
+        "Run a command via `pwsh.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command` when available, falling back to `powershell.exe` with the same arguments. \
          Stdout and stderr are captured separately and merged in the response; \
          a non-zero exit code is appended as `exit N`. \
          Output is truncated to the last 2000 lines or 50 KiB (whichever is hit first); \
@@ -57,14 +59,55 @@ impl Tool for PowerShellTool {
                 Err(e) => return *e,
             };
 
-            SubprocessCommand::new("powershell.exe")
+            SubprocessCommand::new(preferred_powershell_program())
+                .arg("-NoLogo")
                 .arg("-NoProfile")
+                .arg("-NonInteractive")
+                .arg("-ExecutionPolicy")
+                .arg("Bypass")
                 .arg("-Command")
                 .arg(command)
                 .run(ctx)
                 .await
         })
     }
+}
+
+#[cfg(windows)]
+fn preferred_powershell_program() -> &'static str {
+    preferred_powershell_program_in(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ))
+}
+
+#[cfg(not(windows))]
+fn preferred_powershell_program() -> &'static str {
+    "pwsh"
+}
+
+#[cfg(windows)]
+fn preferred_powershell_program_in<I, P>(paths: I) -> &'static str
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    if program_exists_in_paths("pwsh.exe", paths) {
+        "pwsh.exe"
+    } else {
+        "powershell.exe"
+    }
+}
+
+#[cfg(windows)]
+fn program_exists_in_paths<I, P>(program: &str, paths: I) -> bool
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    paths
+        .into_iter()
+        .map(|path| path.as_ref().join(program))
+        .any(|candidate| candidate.is_file())
 }
 
 #[cfg(test)]
@@ -196,5 +239,26 @@ mod tests {
             result.content.as_text()
         );
         assert!(!result.content.as_text().contains("exit 1"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preferred_powershell_program_falls_back_without_pwsh() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("powershell.exe"), []).expect("write powershell.exe");
+
+        assert_eq!(
+            preferred_powershell_program_in([temp.path()]),
+            "powershell.exe"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preferred_powershell_program_uses_pwsh_when_available() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("pwsh.exe"), []).expect("write pwsh.exe");
+
+        assert_eq!(preferred_powershell_program_in([temp.path()]), "pwsh.exe");
     }
 }

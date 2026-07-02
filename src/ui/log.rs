@@ -230,15 +230,42 @@ fn render_tool_call(
     let name = msg.tool_name.as_deref().unwrap_or("unknown");
 
     if name == "ask_user" {
+        // During streaming, tool_args is still empty; extract question and context
+        // from partial streaming data (same pattern as write_file/edit_file).
+        let streaming_context = msg
+            .tool_partial_snapshot
+            .as_ref()
+            .and_then(|a| a.get("context"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                msg.tool_partial_args
+                    .as_deref()
+                    .and_then(|p| tool_presentation::extract_partial_field(p, "context"))
+            });
+        let streaming_question = msg
+            .tool_partial_snapshot
+            .as_ref()
+            .and_then(|a| a.get("question"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                msg.tool_partial_args
+                    .as_deref()
+                    .and_then(|p| tool_presentation::extract_partial_field(p, "question"))
+            });
+
         let args = msg.tool_args.as_ref();
         let context = args
             .and_then(|a| a.get("context"))
             .and_then(|v| v.as_str())
+            .or(streaming_context.as_deref())
             .map(str::trim)
             .filter(|s| !s.is_empty());
         let question = args
             .and_then(|a| a.get("question"))
             .and_then(|v| v.as_str())
+            .or(streaming_question.as_deref())
             .unwrap_or("");
 
         // Context always renders in the log — the selection header only
@@ -1378,7 +1405,7 @@ pub(super) fn sanitize_for_display(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ToolBodyConfig, build_log_lines, dim_lines, trim_assistant_block_edges};
-    use crate::llm::{AssistantPhase, DisplayRange, Message};
+    use crate::llm::{AssistantPhase, DisplayRange, Message, Role};
     use ratatui::{
         style::Color,
         text::{Line, Span},
@@ -1954,6 +1981,91 @@ mod tests {
         assert!(
             text.iter().any(|t| t.contains("Option A")),
             "response not rendered"
+        );
+    }
+
+    #[test]
+    fn ask_user_renders_question_from_partial_snapshot_during_streaming() {
+        // During streaming, tool_args is empty but tool_partial_snapshot has
+        // the question. The question must render in the log.
+        let mut call = Message {
+            role: Role::ToolCall,
+            tool_call_id: Some("c1".to_string()),
+            tool_name: Some("ask_user".to_string()),
+            tool_args: Some(serde_json::json!({})), // empty — still streaming
+            tool_partial_snapshot: Some(serde_json::json!({
+                "question": "What do you think?"
+            })),
+            tool_streaming_field: Some("question".to_string()),
+            ..Message::default()
+        };
+        call.role = Role::ToolCall;
+        let lines = build_log_lines(
+            &[call],
+            false,
+            120,
+            &cfg(),
+            &crate::theme::Theme::default(),
+            &crate::config::DisplayConfig::default(),
+        );
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(
+            text.iter().any(|t| t.contains("What do you think?")),
+            "question from partial_snapshot should be visible in the log:\n{}",
+            text.join("\n")
+        );
+    }
+
+    #[test]
+    fn ask_user_renders_context_from_partial_snapshot_during_streaming() {
+        // During streaming, tool_args is empty but tool_partial_snapshot has
+        // the context. The context must render in the log.
+        let mut call = Message {
+            role: Role::ToolCall,
+            tool_call_id: Some("c1".to_string()),
+            tool_name: Some("ask_user".to_string()),
+            tool_args: Some(serde_json::json!({})), // empty — still streaming
+            tool_partial_snapshot: Some(serde_json::json!({
+                "question": "Proceed?",
+                "context": "Summary: we found the bug."
+            })),
+            tool_streaming_field: Some("question".to_string()),
+            ..Message::default()
+        };
+        call.role = Role::ToolCall;
+        let lines = build_log_lines(
+            &[call],
+            false,
+            120,
+            &cfg(),
+            &crate::theme::Theme::default(),
+            &crate::config::DisplayConfig::default(),
+        );
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(
+            text.iter().any(|t| t.contains("Summary: we found the bug.")),
+            "context from partial_snapshot should be visible in the log:\n{}",
+            text.join("\n")
+        );
+        assert!(
+            text.iter().any(|t| t.contains("Proceed?")),
+            "question should also be visible"
         );
     }
 

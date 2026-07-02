@@ -221,6 +221,10 @@ const HELP_TEXT: &str = r#"# Test Provider Commands
 | `ask-context [question]` | `ask_user` with context + options + freeform |
 | `ask-type [question]` | `ask_user` freeform only (no options) |
 | `ask-notype [question]` | `ask_user` options only (no freeform) |
+| `stream-ask [question]` | Streaming `ask_user` with options + freeform |
+| `stream-ask-context [question]` | Streaming `ask_user` with context + options + freeform |
+| `stream-ask-type [question]` | Streaming `ask_user` freeform only (no options) |
+| `stream-ask-notype [question]` | Streaming `ask_user` options only (no freeform) |
 
 ## Shell commands
 
@@ -685,6 +689,58 @@ fn streaming_bash_stream() -> LlmStream {
     )
 }
 
+/// Build a streaming ask_user tool call with options and freeform.
+fn streaming_ask_stream(question: String, context: Option<&'static str>) -> LlmStream {
+    let options: serde_json::Value = vec!["Option A", "Option B", "Option C"]
+        .into_iter()
+        .map(|s| serde_json::Value::String(s.to_string()))
+        .collect::<Vec<_>>()
+        .into();
+    let mut args = serde_json::json!({
+        "question": question,
+        "options": options,
+        "allowFreeform": true,
+    });
+    if let Some(ctx) = context {
+        args["context"] = serde_json::Value::String(ctx.to_string());
+    }
+    streaming_tool_call("ask_user".to_string(), args)
+}
+
+/// Build a streaming ask_user tool call with context, options, and freeform.
+fn streaming_ask_context_stream(question: String) -> LlmStream {
+    streaming_ask_stream(question, Some(ASK_CONTEXT))
+}
+
+/// Build a streaming ask_user tool call with freeform only (no options).
+fn streaming_ask_type_stream(question: String) -> LlmStream {
+    streaming_tool_call(
+        "ask_user".to_string(),
+        serde_json::json!({
+            "question": question,
+            "options": [],
+            "allowFreeform": true,
+        }),
+    )
+}
+
+/// Build a streaming ask_user tool call with options only (no freeform).
+fn streaming_ask_notype_stream(question: String) -> LlmStream {
+    let options: serde_json::Value = vec!["Choice 1", "Choice 2", "Choice 3"]
+        .into_iter()
+        .map(|s| serde_json::Value::String(s.to_string()))
+        .collect::<Vec<_>>()
+        .into();
+    streaming_tool_call(
+        "ask_user".to_string(),
+        serde_json::json!({
+            "question": question,
+            "options": options,
+            "allowFreeform": false,
+        }),
+    )
+}
+
 /// Build a non-streaming python tool call (quick, single output).
 fn python_stream() -> LlmStream {
     Box::pin(stream! {
@@ -977,6 +1033,42 @@ impl super::LlmProvider for TestProvider {
                     rest
                 };
                 ask_user_stream(question, None, &["Choice 1", "Choice 2", "Choice 3"], false)
+            }
+
+            "stream-ask" => {
+                let question = if rest.is_empty() {
+                    ASK_QUESTION.to_string()
+                } else {
+                    rest
+                };
+                streaming_ask_stream(question, None)
+            }
+
+            "stream-ask-context" => {
+                let question = if rest.is_empty() {
+                    ASK_CONTEXT_QUESTION.to_string()
+                } else {
+                    rest
+                };
+                streaming_ask_context_stream(question)
+            }
+
+            "stream-ask-type" => {
+                let question = if rest.is_empty() {
+                    ASK_TYPE_QUESTION.to_string()
+                } else {
+                    rest
+                };
+                streaming_ask_type_stream(question)
+            }
+
+            "stream-ask-notype" => {
+                let question = if rest.is_empty() {
+                    ASK_NOTYPE_QUESTION.to_string()
+                } else {
+                    rest
+                };
+                streaming_ask_notype_stream(question)
             }
 
             "bash" => {

@@ -480,20 +480,11 @@ impl App {
 
     /// Navigate the selection menu down (wraps around).
     pub fn selection_select_next(&mut self) {
-        let len = self.selection.items.len();
-        if len == 0 {
+        if self.selection.items.is_empty() {
             return;
         }
-
-        let start = self.selection.selected;
-        loop {
-            self.selection.selected = (self.selection.selected + 1) % len;
-            let item = &self.selection.items[self.selection.selected];
-            if !item.loading || self.selection.selected == start {
-                break;
-            }
-        }
-
+        self.selection.selected =
+            advance_selection(&self.selection.items, self.selection.selected, true);
         if self.selection.selected == 0 {
             self.selection.scroll = 0;
         } else {
@@ -503,22 +494,17 @@ impl App {
 
     /// Navigate the selection menu up (wraps around).
     pub fn selection_select_prev(&mut self) {
-        let len = self.selection.items.len();
-        if len == 0 {
+        if self.selection.items.is_empty() {
             return;
         }
-
-        let start = self.selection.selected;
-        loop {
-            self.selection.selected = (self.selection.selected + len - 1) % len;
-            let item = &self.selection.items[self.selection.selected];
-            if !item.loading || self.selection.selected == start {
-                break;
-            }
-        }
-
-        if self.selection.selected == len - 1 {
-            self.selection.scroll = len.saturating_sub(MAX_SELECTION_VISIBLE);
+        self.selection.selected =
+            advance_selection(&self.selection.items, self.selection.selected, false);
+        if self.selection.selected == self.selection.items.len() - 1 {
+            self.selection.scroll = self
+                .selection
+                .items
+                .len()
+                .saturating_sub(MAX_SELECTION_VISIBLE);
         } else {
             self.ensure_selection_visible();
         }
@@ -526,21 +512,13 @@ impl App {
 
     /// Jump forward one page (MAX_SELECTION_VISIBLE items) in the selection menu.
     pub fn selection_page_down(&mut self) {
-        let len = self.selection.items.len();
-        if len == 0 {
+        if self.selection.items.is_empty() {
             return;
         }
-
+        let len = self.selection.items.len();
         let start = self.selection.selected;
-        self.selection.selected = (self.selection.selected + MAX_SELECTION_VISIBLE).min(len - 1);
-        while self.selection.items[self.selection.selected].loading
-            && self.selection.selected < len - 1
-        {
-            self.selection.selected += 1;
-        }
-        while self.selection.items[self.selection.selected].loading && self.selection.selected > 0 {
-            self.selection.selected -= 1;
-        }
+        let target = (self.selection.selected + MAX_SELECTION_VISIBLE).min(len - 1);
+        self.selection.selected = nearest_non_loading(&self.selection.items, target, true);
         if self.selection.selected != start {
             self.ensure_selection_visible();
         }
@@ -548,24 +526,12 @@ impl App {
 
     /// Jump backward one page (MAX_SELECTION_VISIBLE items) in the selection menu.
     pub fn selection_page_up(&mut self) {
-        let len = self.selection.items.len();
-        if len == 0 {
+        if self.selection.items.is_empty() {
             return;
         }
-
         let start = self.selection.selected;
-        self.selection.selected = self
-            .selection
-            .selected
-            .saturating_sub(MAX_SELECTION_VISIBLE);
-        while self.selection.items[self.selection.selected].loading && self.selection.selected > 0 {
-            self.selection.selected -= 1;
-        }
-        while self.selection.items[self.selection.selected].loading
-            && self.selection.selected < len - 1
-        {
-            self.selection.selected += 1;
-        }
+        let target = self.selection.selected.saturating_sub(MAX_SELECTION_VISIBLE);
+        self.selection.selected = nearest_non_loading(&self.selection.items, target, false);
         if self.selection.selected != start {
             self.ensure_selection_visible();
         }
@@ -1088,5 +1054,203 @@ impl App {
         self.reset_textarea();
         self.log_view.auto_scroll = true;
         self.refresh_resume_availability();
+    }
+}
+
+// ── Selection navigation helpers ──────────────────────────────────────────────
+
+/// Advance `selected` by one index (wrapping), skipping loading items.
+/// Returns the new index, or the original if all items are loading.
+fn advance_selection(items: &[CompletionItem], current: usize, forward: bool) -> usize {
+    let len = items.len();
+    if len <= 1 {
+        return current;
+    }
+    let start = current;
+    let mut idx = current;
+    loop {
+        idx = if forward {
+            (idx + 1) % len
+        } else {
+            (idx + len - 1) % len
+        };
+        if !items[idx].loading || idx == start {
+            return idx;
+        }
+    }
+}
+
+/// Find the nearest non-loading item starting from `idx`.
+///
+/// When `prefer_forward` is true, scans forward from `idx` to the end, then
+/// backward from `idx - 1` to the start. When false, scans backward first,
+/// then forward.
+fn nearest_non_loading(items: &[CompletionItem], idx: usize, prefer_forward: bool) -> usize {
+    if items.is_empty() {
+        return 0;
+    }
+    if prefer_forward {
+        for (i, item) in items.iter().enumerate().skip(idx) {
+            if !item.loading {
+                return i;
+            }
+        }
+        for (i, item) in items.iter().enumerate().take(idx).rev() {
+            if !item.loading {
+                return i;
+            }
+        }
+    } else {
+        for (i, item) in items.iter().enumerate().take(idx + 1).rev() {
+            if !item.loading {
+                return i;
+            }
+        }
+        for (i, item) in items.iter().enumerate().skip(idx + 1) {
+            if !item.loading {
+                return i;
+            }
+        }
+    }
+    idx
+}
+
+#[cfg(test)]
+mod selection_nav_tests {
+    use super::*;
+    use crate::completion::CompletionItem;
+
+    fn item(label: &str, loading: bool) -> CompletionItem {
+        CompletionItem {
+            label: label.to_string(),
+            detail: String::new(),
+            complete_to: if loading {
+                String::new()
+            } else {
+                label.to_string()
+            },
+            loading,
+            error: false,
+            match_range: None,
+        }
+    }
+
+    #[test]
+    fn advance_forward_skips_loading() {
+        let items = vec![
+            item("a", false),
+            item("header", true),
+            item("b", false),
+            item("header2", true),
+            item("c", false),
+        ];
+        // from 0 (a) -> skip header -> 2 (b)
+        assert_eq!(advance_selection(&items, 0, true), 2);
+        // from 2 (b) -> skip header2 -> 4 (c)
+        assert_eq!(advance_selection(&items, 2, true), 4);
+    }
+
+    #[test]
+    fn advance_backward_skips_loading() {
+        let items = vec![
+            item("a", false),
+            item("header", true),
+            item("b", false),
+        ];
+        // from 2 (b) -> skip header -> 0 (a)
+        assert_eq!(advance_selection(&items, 2, false), 0);
+    }
+
+    #[test]
+    fn advance_wraps_around() {
+        let items = vec![
+            item("a", false),
+            item("header", true),
+            item("b", false),
+        ];
+        // from 2 (b) forward -> wraps to 0 (a)
+        assert_eq!(advance_selection(&items, 2, true), 0);
+        // from 0 (a) backward -> wraps to 2 (b), skipping header
+        assert_eq!(advance_selection(&items, 0, false), 2);
+    }
+
+    #[test]
+    fn advance_all_loading_returns_original() {
+        let items = vec![item("x", true), item("y", true)];
+        assert_eq!(advance_selection(&items, 0, true), 0);
+        assert_eq!(advance_selection(&items, 1, false), 1);
+    }
+
+    #[test]
+    fn advance_empty_returns_zero() {
+        let items: Vec<CompletionItem> = vec![];
+        assert_eq!(advance_selection(&items, 0, true), 0);
+    }
+
+    #[test]
+    fn advance_single_item_returns_same() {
+        let items = vec![item("only", false)];
+        assert_eq!(advance_selection(&items, 0, true), 0);
+    }
+
+    #[test]
+    fn nearest_non_loading_prefers_forward() {
+        let items = vec![
+            item("a", false),
+            item("h1", true),
+            item("h2", true),
+            item("b", false),
+            item("c", false),
+        ];
+        // from 1 (h1) -> forward to 3 (b)
+        assert_eq!(nearest_non_loading(&items, 1, true), 3);
+    }
+
+    #[test]
+    fn nearest_non_loading_falls_back_forward() {
+        let items = vec![
+            item("a", false),
+            item("b", false),
+            item("h1", true),
+        ];
+        // from 2 (h1) -> forward finds nothing -> backward to 1 (b)
+        assert_eq!(nearest_non_loading(&items, 2, true), 1);
+    }
+
+    #[test]
+    fn nearest_non_loading_prefers_backward() {
+        let items = vec![
+            item("a", false),
+            item("b", false),
+            item("h1", true),
+            item("h2", true),
+            item("c", false),
+        ];
+        // from 3 (h2) -> backward to 1 (b)
+        assert_eq!(nearest_non_loading(&items, 3, false), 1);
+    }
+
+    #[test]
+    fn nearest_non_loading_falls_forward_backward() {
+        let items = vec![
+            item("h1", true),
+            item("a", false),
+            item("b", false),
+        ];
+        // from 0 (h1) -> backward finds nothing -> forward to 1 (a)
+        assert_eq!(nearest_non_loading(&items, 0, false), 1);
+    }
+
+    #[test]
+    fn nearest_non_loading_all_loading_returns_idx() {
+        let items = vec![item("x", true), item("y", true)];
+        assert_eq!(nearest_non_loading(&items, 0, true), 0);
+        assert_eq!(nearest_non_loading(&items, 1, false), 1);
+    }
+
+    #[test]
+    fn nearest_non_loading_empty_returns_zero() {
+        let items: Vec<CompletionItem> = vec![];
+        assert_eq!(nearest_non_loading(&items, 0, true), 0);
     }
 }

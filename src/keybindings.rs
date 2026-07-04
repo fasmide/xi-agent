@@ -247,7 +247,157 @@ pub(crate) fn matches(id: KeyBindingId, key: KeyEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BindingContext, KEYBINDINGS, KeyBindingId};
+    use super::{matches, BindingContext, KEYBINDINGS, KeyBindingId};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    // ── matches() ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn matches_each_binding_id_with_correct_key() {
+        let cases: &[(KeyBindingId, KeyEvent)] = &[
+            (
+                KeyBindingId::ShowHelp,
+                KeyEvent::new(KeyCode::F(1), KeyModifiers::empty()),
+            ),
+            (
+                KeyBindingId::Quit,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            ),
+            (
+                KeyBindingId::QuitIfInputEmpty,
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            ),
+            (
+                KeyBindingId::ToggleInfo,
+                KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL),
+            ),
+            (
+                KeyBindingId::ToggleInfoAlt,
+                KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT),
+            ),
+            (
+                KeyBindingId::CopyLastAssistantResponse,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT),
+            ),
+            (
+                KeyBindingId::ToggleFullOutput,
+                KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            ),
+            (
+                KeyBindingId::ResumeLatestSession,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            ),
+            (
+                KeyBindingId::CycleShell,
+                KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            ),
+            (
+                KeyBindingId::EditProvider,
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            ),
+            (
+                KeyBindingId::RemoveProvider,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            ),
+            (
+                KeyBindingId::EnterShellMode,
+                KeyEvent::new(KeyCode::Char('!'), KeyModifiers::empty()),
+            ),
+            (
+                KeyBindingId::StepBack,
+                KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
+            ),
+            (
+                KeyBindingId::ScrollPageUp,
+                KeyEvent::new(KeyCode::PageUp, KeyModifiers::empty()),
+            ),
+            (
+                KeyBindingId::Submit,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+            ),
+            (
+                KeyBindingId::InsertNewline,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+            ),
+            (
+                KeyBindingId::ApplyCompletion,
+                KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
+            ),
+            (
+                KeyBindingId::Cancel,
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()),
+            ),
+            (
+                KeyBindingId::ExitShellOnEmptyBackspace,
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()),
+            ),
+            (
+                KeyBindingId::SelectionUp,
+                KeyEvent::new(KeyCode::Up, KeyModifiers::empty()),
+            ),
+        ];
+
+        for (id, key) in cases {
+            assert!(
+                matches(*id, *key),
+                "expected matches({id:?}, {key:?}) == true"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_rejects_wrong_key_for_binding() {
+        // Ctrl+C should not match ToggleInfo
+        assert!(!matches(
+            KeyBindingId::ToggleInfo,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+        ));
+        // Alt+S should not match CycleShell (which is Ctrl+S)
+        assert!(!matches(
+            KeyBindingId::CycleShell,
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT)
+        ));
+        // Enter+Shift should not match Submit (which requires no modifiers)
+        assert!(!matches(
+            KeyBindingId::Submit,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+        ));
+    }
+
+    #[test]
+    fn matches_enter_shell_mode_with_shift() {
+        // ! with Shift should also match EnterShellMode
+        assert!(matches(
+            KeyBindingId::EnterShellMode,
+            KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT)
+        ));
+    }
+
+    #[test]
+    fn matches_step_back_with_alt_down() {
+        assert!(matches(
+            KeyBindingId::StepBack,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::ALT)
+        ));
+    }
+
+    #[test]
+    fn matches_scroll_page_up_with_page_down() {
+        assert!(matches(
+            KeyBindingId::ScrollPageUp,
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::empty())
+        ));
+    }
+
+    #[test]
+    fn matches_selection_up_with_down() {
+        assert!(matches(
+            KeyBindingId::SelectionUp,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::empty())
+        ));
+    }
+
+    // ── table ─────────────────────────────────────────────────────────────
 
     #[test]
     fn help_modal_binding_is_listed() {
@@ -275,5 +425,17 @@ mod tests {
                 .iter()
                 .any(|binding| binding.context == BindingContext::Selection)
         );
+    }
+
+    #[test]
+    fn every_keybinding_id_in_table_has_a_matches_arm() {
+        // Every binding with an id in the table should match some key event.
+        for binding in KEYBINDINGS {
+            if let Some(id) = binding.id {
+                // Exercise matches() — not asserting the result, just that
+                // the match arm exists and doesn't panic.
+                let _ = matches(id, KeyEvent::new(KeyCode::F(1), KeyModifiers::empty()));
+            }
+        }
     }
 }

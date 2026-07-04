@@ -46,6 +46,7 @@ mod export;
 mod hook_ipc;
 mod hooks;
 mod input;
+mod keybindings;
 mod live_turn;
 mod llm;
 mod log_view_state;

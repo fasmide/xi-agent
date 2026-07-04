@@ -247,7 +247,7 @@ pub(crate) fn matches(id: KeyBindingId, key: KeyEvent) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{matches, BindingContext, KEYBINDINGS, KeyBindingId};
+    use super::{BindingContext, KEYBINDINGS, KeyBindingId, matches};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     // ── matches() ─────────────────────────────────────────────────────────

@@ -530,7 +530,10 @@ impl App {
             return;
         }
         let start = self.selection.selected;
-        let target = self.selection.selected.saturating_sub(MAX_SELECTION_VISIBLE);
+        let target = self
+            .selection
+            .selected
+            .saturating_sub(MAX_SELECTION_VISIBLE);
         self.selection.selected = nearest_non_loading(&self.selection.items, target, false);
         if self.selection.selected != start {
             self.ensure_selection_visible();
@@ -1152,22 +1155,14 @@ mod selection_nav_tests {
 
     #[test]
     fn advance_backward_skips_loading() {
-        let items = vec![
-            item("a", false),
-            item("header", true),
-            item("b", false),
-        ];
+        let items = vec![item("a", false), item("header", true), item("b", false)];
         // from 2 (b) -> skip header -> 0 (a)
         assert_eq!(advance_selection(&items, 2, false), 0);
     }
 
     #[test]
     fn advance_wraps_around() {
-        let items = vec![
-            item("a", false),
-            item("header", true),
-            item("b", false),
-        ];
+        let items = vec![item("a", false), item("header", true), item("b", false)];
         // from 2 (b) forward -> wraps to 0 (a)
         assert_eq!(advance_selection(&items, 2, true), 0);
         // from 0 (a) backward -> wraps to 2 (b), skipping header
@@ -1208,11 +1203,7 @@ mod selection_nav_tests {
 
     #[test]
     fn nearest_non_loading_falls_back_forward() {
-        let items = vec![
-            item("a", false),
-            item("b", false),
-            item("h1", true),
-        ];
+        let items = vec![item("a", false), item("b", false), item("h1", true)];
         // from 2 (h1) -> forward finds nothing -> backward to 1 (b)
         assert_eq!(nearest_non_loading(&items, 2, true), 1);
     }
@@ -1232,11 +1223,7 @@ mod selection_nav_tests {
 
     #[test]
     fn nearest_non_loading_falls_forward_backward() {
-        let items = vec![
-            item("h1", true),
-            item("a", false),
-            item("b", false),
-        ];
+        let items = vec![item("h1", true), item("a", false), item("b", false)];
         // from 0 (h1) -> backward finds nothing -> forward to 1 (a)
         assert_eq!(nearest_non_loading(&items, 0, false), 1);
     }

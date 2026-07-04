@@ -324,12 +324,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                 "↑↓ navigate   Enter select   Esc cancel  "
             };
             let title = app.selection.title;
-            let query = if app.selection.query.is_empty() {
-                "".to_string()
-            } else {
-                format!("filter: {}", app.selection.query)
-            };
-            let gap = width.saturating_sub(title.width() + query.width() + hints.width());
+            let gap = width.saturating_sub(title.width() + hints.width());
             let header_line = Line::from(vec![
                 Span::styled(
                     title,
@@ -339,7 +334,6 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                         .add_modifier(ratatui::style::Modifier::BOLD),
                 ),
                 Span::styled(" ".repeat(gap), Style::default().bg(header_bg)),
-                Span::styled(query, Style::default().fg(Color::Yellow).bg(header_bg)),
                 Span::styled(
                     hints.to_string(),
                     Style::default()

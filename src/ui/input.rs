@@ -264,7 +264,7 @@ pub(super) fn render_input_panel(
     let is_shell = app.input_mode == InputMode::Shell;
     let input_width = area.width as usize;
 
-    let (input_lines, cursor, prefix, hint) = if is_shell {
+    let (mut input_lines, mut cursor, mut prefix, mut hint) = if is_shell {
         let cwd = if app.session.current_cwd.is_empty() {
             ".".to_string()
         } else {
@@ -308,6 +308,21 @@ pub(super) fn render_input_panel(
             None,
         )
     };
+
+    // ── Selection filter mirror ───────────────────────────────────────────
+    // When the selection menu is active and supports filtering, show the
+    // filter query in the input field instead of the (typically empty) textarea.
+    if app.selection.active && app.selection_filter_enabled() && !app.ask_user_freeform_mode() {
+        let filter = app.selection.query.clone();
+        cursor = (0, filter.len()).into();
+        input_lines = if filter.is_empty() {
+            vec![String::new()]
+        } else {
+            vec![filter]
+        };
+        prefix = String::new();
+        hint = None;
+    }
 
     let wrap_width = if prefix.is_empty() {
         input_width

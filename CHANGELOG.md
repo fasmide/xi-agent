@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.0 — Unreleased
+## v0.4.0 — 2026-07-05
 
 ### Added
 
@@ -17,6 +17,43 @@
   `deepseek-v4-flash` and `deepseek-v4-pro` (kludge until upstream metadata
   is available).
 - **Alt+S shortcut**: toggle the info bar on and off without `/info`.
+- **Theme configuration system**: themeable UI with CSS-style color specs
+  and terminal color support via a TOML configuration file.
+- **Agent-level hooks system**: pluggable hook points for tool lifecycle
+  (`OnToolIntent`), streaming milestones (`OnFirstThinkingToken`,
+  `OnFirstTextToken`), and session events (`OnIdle`, `OnCompacting`,
+  `OnExternalChange`, `OnStatusUpdate`), with IPC event streaming for
+  external tooling.
+- **Alt+C shortcut**: copy the last assistant response to the system
+  clipboard.
+- **Step-back navigation**: step back through ask_user answers with full
+  prompt UI restoration, enabling re-answering or branching from any
+  decision point.
+- **Mouse text selection**: click-drag to select and copy text from the
+  log view.
+- **Similar session scope**: a "similar" scope between `local` and
+  `foreign` in the session resume picker for faster filtering.
+- **`/new` resets FileTracker and reloads skills**, ensuring a clean
+  environment for each fresh session.
+- **`@file` backtick notation**: `@filename` mentions are rewritten to
+  backtick-quoted paths for LLM consumption, reducing confusion.
+- **`read_skill` and `edit_skill` tools**: embedded tools for listing,
+  loading, and editing skills, with filesystem paths and scope
+  indicators.
+- **User message markdown rendering**: user prompts are now rendered with
+  markdown formatting in the log view, matching assistant output.
+- **Keyboard shortcuts help**: accessible via `?` key.
+- **Block content alignment**: all block content consistently aligned to
+  column 3 with margin markers.
+- **Edit diff fillers**: adjacent "total lines" and "common lines" fillers
+  in `edit_file` diffs are collapsed to reduce noise.
+- **Provider synthesis**: built-in provider instances synthesised
+  automatically; explicit provider selection required for ambiguous
+  configurations.
+- **OSC 52 clipboard**: clipboard integration via OSC 52 escape sequences,
+  replacing the `arboard` crate for broader terminal compatibility.
+- **Python 🐍 emoji**: the built-in Python tool now shows a Python emoji
+  icon.
 
 ### Fixed
 
@@ -42,6 +79,51 @@
 - **Codex prompt cache hits**: parse `input_tokens_details.cached_tokens`
   from the OpenAI Responses API in the Codex provider, so cache-hit
   indicators appear for Copilot GPT-5.x models.
+- **Copilot auth**: full token (with metadata) is now stripped correctly
+  before use as Bearer auth, fixing authentication failures.
+- **ask_user rendering**: questions now stream from partial data during
+  tool call rendering and appear in the log; rendering layout improved.
+- **Provider switching**: changing providers no longer uses a stale model
+  list for fetching; model list auto-fetches on startup even when a model
+  is already configured.
+- **Config load failures** are now fatal, preventing silent overwrite of
+  user configuration with defaults.
+- **Anthropic null tool_args**: providers now guard against null tool
+  arguments in Anthropic wire format.
+- **Auth token expiry**: standardized across backends with a new
+  `OAuthBackend` trait and test infrastructure.
+- **Serde error messages**: Rust struct names in serde errors are now
+  translated to model-friendly JSON concepts.
+- **Tool descriptions**: reworded to prevent redundant `2>&1` and
+  absolute-path annotations in shell commands.
+- **System prompt** clarifies that file paths are relative to the working
+  directory.
+- **Input panel**: scroll-to-cursor behavior added when text exceeds the
+  viewport.
+- **Tool invocation labels**: leading and trailing empty lines trimmed;
+  placeholder labels shown consistently during streaming; tool icons
+  render normally even when labels are italic.
+- **Output trimming**: leading and trailing empty wrapped lines removed
+  from output blocks; body line limit enforced on wrapped visual lines,
+  not logical lines.
+- **Thinking display**: final streaming line uses ┆ instead of ╰; blank
+  separator line removed between thinking and response; display stabilized
+  by truncating wrapped lines.
+- **Throbber**: no longer sticks or blocks Escape during token refresh;
+  remains visible during retry; refreshes correctly on tool intent, args
+  delta, and output chunks.
+- **Streaming blocks**: padded during shrink to prevent layout jitter;
+  partial-JSON headline blink eliminated.
+- **Markdown**: extra blank line after pre-formatted text removed;
+  HTML/XML tags now rendered verbatim instead of silently dropped.
+- **OpenAI reasoning content**: always included in assistant wire format;
+  OpenAI-specific parameters guarded by backend type.
+- **OpenWebUI context window**: auto-discovered for OpenAI-compatible
+  backends.
+- **PowerShell** now runs noninteractively.
+- **Windows build** fixed and tests made cross-platform.
+- **Log redraw** now happens before disk I/O on submit for lower perceived
+  latency.
 
 ## v0.3.0 — 2026-05-31
 

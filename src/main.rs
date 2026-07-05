@@ -2,8 +2,8 @@ use clap::Parser;
 use crossterm::{
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, EventStream, KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        Event, EventStream, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
@@ -53,6 +53,7 @@ mod log_view_state;
 mod login_state;
 mod markdown;
 mod migrate;
+mod mouse_select;
 mod process;
 mod projection;
 mod provider;
@@ -734,10 +735,38 @@ async fn run(
                             return Ok(result);
                         }
                     }
-                    Event::Mouse(mouse) => match mouse.kind {
-                        MouseEventKind::ScrollUp   => app.scroll_up_lines(3),
-                        MouseEventKind::ScrollDown => app.scroll_down_lines(3),
-                        _ => {}
+                    Event::Mouse(mouse) => {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => app.scroll_up_lines(3),
+                            MouseEventKind::ScrollDown => app.scroll_down_lines(3),
+                            MouseEventKind::Down(MouseButton::Left) => {
+                                let col = mouse.column;
+                                let row = mouse.row;
+                                if app.mouse_select.handle_mouse_down(
+                                    col, row,
+                                    app.log_view.auto_scroll,
+                                ) {
+                                    app.log_view.auto_scroll = false;
+                                    needs_redraw = true;
+                                }
+                            }
+                            MouseEventKind::Drag(MouseButton::Left) => {
+                                app.mouse_select.handle_mouse_drag(
+                                    mouse.column, mouse.row,
+                                );
+                                needs_redraw = true;
+                            }
+                            MouseEventKind::Up(MouseButton::Left) => {
+                                if let Some(text) = app.mouse_select.handle_mouse_up() {
+                                    let _ = crate::clipboard::set_clipboard(&text);
+                                }
+                                if let Some(saved) = app.mouse_select.take_saved_auto_scroll() {
+                                    app.log_view.auto_scroll = saved;
+                                }
+                                needs_redraw = true;
+                            }
+                            _ => {}
+                        }
                     },
                     Event::Paste(text)
                         if !app.login.active => {

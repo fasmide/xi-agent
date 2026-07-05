@@ -6,6 +6,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     llm::{AssistantPhase, Message, Role},
+    mouse_select::LineSource,
     theme::Theme,
     tool_presentation,
 };
@@ -100,11 +101,32 @@ pub(super) fn build_log_lines(
     cfg: &ToolBodyConfig,
     theme: &Theme,
     display: &DisplayConfig,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<LineSource>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut sources: Vec<LineSource> = Vec::new();
+
+    /// Push [`LineSource`] entries for all lines added since `prev_len`,
+    /// assigning them to `msg_idx` with the given properties.
+    fn push_sources(
+        sources: &mut Vec<LineSource>,
+        lines: &[Line<'static>],
+        prev_len: usize,
+        msg_idx: usize,
+        decoration_width: u16,
+        streaming: bool,
+    ) {
+        let _ = msg_idx; // keep for caller readability
+        for _ in prev_len..lines.len() {
+            sources.push(LineSource {
+                decoration_width,
+                streaming,
+            });
+        }
+    }
 
     for (idx, msg) in messages.iter().enumerate() {
         let is_last = idx == messages.len() - 1;
+        let msg_streaming = streaming && is_last;
 
         match msg.role {
             Role::User => {
@@ -112,7 +134,9 @@ pub(super) fn build_log_lines(
                     continue;
                 }
                 let user_bg = theme.log.user.bg.unwrap_or(Color::Rgb(50, 50, 64));
+                let prev = lines.len();
                 append_message_markdown(&mut lines, &msg.content, width, user_bg, &theme.markdown);
+                push_sources(&mut sources, &lines, prev, idx, 0, msg_streaming);
             }
             Role::System => {}
             Role::Assistant => {
@@ -125,8 +149,6 @@ pub(super) fn build_log_lines(
                     let thinking_display = {
                         let sanitized = sanitize_for_display(thinking);
                         let all_lines: Vec<&str> = sanitized.lines().collect();
-                        // Wrap each logical line to terminal width, then take only the
-                        // last 5 *displayed* lines for visual stability as the model streams.
                         let wrap_width = width.saturating_sub(3).max(1);
                         let mut wrapped: Vec<String> = Vec::new();
                         for logical in all_lines {
@@ -140,8 +162,7 @@ pub(super) fn build_log_lines(
                         let shown = trim_empty_edges(&wrapped[skip..], |s| s.is_empty());
                         shown.join("\n")
                     };
-                    // Thinking is always a complete, contiguous block that
-                    // finishes before the response starts — across all providers.
+                    let prev = lines.len();
                     append_message_colored(
                         &mut lines,
                         &format!("🧠 {}", thinking_display),
@@ -150,6 +171,7 @@ pub(super) fn build_log_lines(
                         false,
                         is_streaming_last && !has_answer,
                     );
+                    push_sources(&mut sources, &lines, prev, idx, 3, msg_streaming);
                 }
 
                 let effective_phase = match msg.assistant_phase {
@@ -195,24 +217,31 @@ pub(super) fn build_log_lines(
                         .unwrap_or("💬 ")
                         .trim_end(),
                 };
+                let deco_width = unicode_width::UnicodeWidthStr::width(answer_icon) as u16 + 1;
 
                 if has_answer {
                     let md_width = width.saturating_sub(3).max(1);
                     let md_lines =
                         crate::markdown::render_with_theme(&content, md_width, "", &theme.markdown);
+                    let prev = lines.len();
                     append_markdown_answer(&mut lines, answer_icon, md_lines, is_streaming_last);
+                    push_sources(&mut sources, &lines, prev, idx, deco_width, msg_streaming);
                 }
             }
             Role::ToolCall => {
+                let prev = lines.len();
                 render_tool_call(messages, idx, width, cfg, theme, display, &mut lines);
+                push_sources(&mut sources, &lines, prev, idx, 3, msg_streaming);
             }
             Role::ToolResult => {
+                let prev = lines.len();
                 render_tool_result(messages, idx, width, cfg, theme, display, &mut lines);
+                push_sources(&mut sources, &lines, prev, idx, 3, msg_streaming);
             }
         }
     }
 
-    lines
+    (lines, sources)
 }
 
 // ── Tool call rendering ───────────────────────────────────────────────────────
@@ -1492,7 +1521,7 @@ mod tests {
     fn build_log_lines_hides_whitespace_only_streaming_assistant() {
         let mut msg = Message::assistant("\n   \n".to_string());
         msg.assistant_phase = Some(AssistantPhase::Provisional);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[msg],
             true,
             80,
@@ -1513,7 +1542,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = Message::tool_result("c1", &content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1540,7 +1569,7 @@ mod tests {
         let call = Message::tool_call("c1", "read_file", serde_json::json!({"path": "foo.rs"}));
         let content = "line1\nline2\nline3";
         let result = Message::tool_result("c1", content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1569,7 +1598,7 @@ mod tests {
             last_line: 5,
             total_lines: 100,
         });
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1598,7 +1627,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = Message::tool_result("c1", &content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1628,7 +1657,7 @@ mod tests {
             serde_json::json!({"path": "foo.rs", "old_text": "old line", "new_text": "new line"}),
         );
         let result = Message::tool_result("c1", "Successfully edited foo.rs", false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1671,7 +1700,7 @@ mod tests {
             serde_json::json!({"path": "foo.rs", "old_text": old, "new_text": new}),
         );
         let result = Message::tool_result("c1", "ok", false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1702,7 +1731,7 @@ mod tests {
             serde_json::json!({"path": "foo.rs", "old_text": "prefix\n", "new_text": "prefix\nnew line\n"}),
         );
         let result = Message::tool_result("c1", "ok", false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1738,7 +1767,7 @@ mod tests {
             serde_json::json!({"path": "foo.rs", "old_text": "prefix\nold line\n", "new_text": "prefix\n"}),
         );
         let result = Message::tool_result("c1", "ok", false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1773,7 +1802,7 @@ mod tests {
             serde_json::json!({"path": "foo.rs", "old_text": "x", "new_text": "y"}),
         );
         let result = Message::tool_result("c1", "old_text not found", true);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1804,7 +1833,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = Message::tool_result("c1", &content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1848,7 +1877,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = Message::tool_result("c1", &content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1893,7 +1922,7 @@ mod tests {
             full_output: true,
             ..ToolBodyConfig::default()
         };
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -1925,7 +1954,7 @@ mod tests {
             serde_json::json!({"question": "What do you want?"}),
         );
         // Question always renders in the log body.
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call],
             false,
             120,
@@ -1957,7 +1986,7 @@ mod tests {
         );
         let result = Message::tool_result("c1", "Option A", false);
         // Committed turn: question should appear in the log.
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -2000,7 +2029,7 @@ mod tests {
             ..Message::default()
         };
         call.role = Role::ToolCall;
-        let lines = build_log_lines(
+        let (lines, _) = build_log_lines(
             &[call],
             false,
             120,
@@ -2041,7 +2070,7 @@ mod tests {
             ..Message::default()
         };
         call.role = Role::ToolCall;
-        let lines = build_log_lines(
+        let (lines, _) = build_log_lines(
             &[call],
             false,
             120,
@@ -2083,7 +2112,7 @@ mod tests {
             serde_json::json!({"path": "/tmp/out.rs", "content": "fn main() {}"}),
         );
         let result = Message::tool_result("c1", "Written 1 lines to /tmp/out.rs", false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -2128,7 +2157,7 @@ mod tests {
         let content = format!("{}\n{}", long_line, long_line);
         let call = Message::tool_call("c1", "read_file", serde_json::json!({"path": "f"}));
         let result = Message::tool_result("c1", &content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             20, // narrow terminal → forces wrapping
@@ -2159,7 +2188,7 @@ mod tests {
         let content = format!("{}\n{}", long_line, long_line);
         let call = Message::tool_call("c1", "bash", serde_json::json!({"command": "echo"}));
         let result = Message::tool_result("c1", &content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             20,
@@ -2180,7 +2209,7 @@ mod tests {
         let content = "short line";
         let call = Message::tool_call("c1", "read_file", serde_json::json!({"path": "f"}));
         let result = Message::tool_result("c1", content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -2200,7 +2229,7 @@ mod tests {
         let content = "short output";
         let call = Message::tool_call("c1", "bash", serde_json::json!({"command": "echo"}));
         let result = Message::tool_result("c1", content, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             120,
@@ -2221,7 +2250,7 @@ mod tests {
         let long_line = "x".repeat(500); // ~seven wrapped lines at width 80
         let call = Message::tool_call("c1", "read_file", serde_json::json!({"path": "f"}));
         let result = Message::tool_result("c1", long_line, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             80,
@@ -2247,7 +2276,7 @@ mod tests {
         let long_line = "x".repeat(500);
         let call = Message::tool_call("c1", "read_file", serde_json::json!({"path": "f"}));
         let result = Message::tool_result("c1", long_line, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             20, // narrow → ~26 wrapped chunks (500/17 ≈ 30)
@@ -2267,7 +2296,7 @@ mod tests {
         let long_line = "x".repeat(500);
         let call = Message::tool_call("c1", "bash", serde_json::json!({"command": "echo"}));
         let result = Message::tool_result("c1", long_line, false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             20,
@@ -2296,7 +2325,7 @@ mod tests {
             serde_json::json!({"path": "f", "old_text": old_long, "new_text": new}),
         );
         let result = Message::tool_result("c1", "ok", false);
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             20,
@@ -2328,7 +2357,7 @@ mod tests {
             full_output: true,
             ..ToolBodyConfig::default()
         };
-        let lines = build_log_lines(
+        let (lines, _sources) = build_log_lines(
             &[call, result],
             false,
             20,

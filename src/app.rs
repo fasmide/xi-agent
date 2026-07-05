@@ -25,6 +25,7 @@ use crate::ask_user_state::AskUserState;
 use crate::completion_state::CompletionState;
 use crate::log_view_state::LogViewState;
 use crate::login_state::{LoginActionKind, LoginState};
+use crate::mouse_select::MouseSelectState;
 use crate::provider_manager::{
     ProviderManager, ProviderSetupStep, active_provider_display_name,
     format_provider_error_for_display,
@@ -154,6 +155,9 @@ pub struct App {
     pub(crate) theme: Theme,
     // ── Display thresholds ────────────────────────────────────────────────────
     pub(crate) display: DisplayConfig,
+
+    // ── Mouse selection ───────────────────────────────────────────────────────
+    pub(crate) mouse_select: MouseSelectState,
 }
 
 // Convenience alias used throughout this module.
@@ -190,6 +194,7 @@ impl App {
             step_back: StepBackState::default(),
             theme: Theme::default(),
             display,
+            mouse_select: MouseSelectState::new(),
         }
     }
 

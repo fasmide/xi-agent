@@ -1,5 +1,16 @@
 use ratatui::text::Line;
 
+use crate::mouse_select::LineSource;
+
+/// Type alias for the cached log lines + hit map tuple.
+pub(crate) type CachedLogLines = (
+    u64,
+    usize,
+    Option<usize>,
+    Vec<Line<'static>>,
+    Vec<LineSource>,
+);
+
 /// Tracks the monotonic log revision and its pre-wrapped line cache.
 ///
 /// Call `invalidate()` whenever log content changes. Call `ensure_cached()` in
@@ -7,8 +18,9 @@ use ratatui::text::Line;
 pub struct LogCache {
     /// Monotonic counter bumped on every log-content change.
     pub(crate) revision: u64,
-    /// Pre-wrapped lines: `(revision, width, step_cursor, lines)`. Invalidated on bump.
-    pub(crate) cached_lines: Option<(u64, usize, Option<usize>, Vec<Line<'static>>)>,
+    /// Pre-wrapped lines + hit map: `(revision, width, step_cursor, lines, hit_map)`.
+    /// Invalidated on bump.
+    pub(crate) cached_lines: Option<CachedLogLines>,
 }
 
 /// Tracks the maximum rendered line count observed during the current streaming

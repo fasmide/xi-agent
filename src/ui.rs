@@ -9,7 +9,7 @@ mod status;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
@@ -20,6 +20,7 @@ use crate::{
     config::DisplayConfig,
     context_window::context_window_for_model,
     log_view_state::PaddingState,
+    mouse_select::LineSource,
     selection_state::{MAX_SELECTION_VISIBLE, SelectionKind},
 };
 
@@ -39,33 +40,36 @@ fn halfblock_line(width: usize, ch: char, color: Color) -> Line<'static> {
     ))
 }
 
-fn build_log_lines_cached<'a>(
-    app: &'a mut App,
+fn build_log_lines_cached(
+    app: &mut App,
     width: usize,
     display: &DisplayConfig,
-) -> &'a Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, Vec<LineSource>) {
     // Flush any pending session-mutation dirty flag into the log cache.
     if app.session.take_dirty() {
         app.log_view.invalidate();
     }
     let step_cursor = app.step_back.cursor;
     let streaming = app.streaming();
-    if !matches!(&app.log_view.log_cache.cached_lines, Some((rev, w, sc, _))
+    if !matches!(&app.log_view.log_cache.cached_lines, Some((rev, w, sc, _, _))
         if *rev == app.log_view.log_cache.revision && *w == width && *sc == step_cursor)
     {
         let cfg = ToolBodyConfig {
             full_output: app.log_view.full_output,
             ..ToolBodyConfig::default()
         };
-        let lines = if let Some((kept, discarded)) = app.display_messages_split() {
-            let mut lines = build_log_lines(&kept, false, width, &cfg, &app.theme, display);
-            lines.extend(dim_lines(build_log_lines(
-                &discarded, false, width, &cfg, &app.theme, display,
-            )));
-            lines
+        let (lines, sources) = if let Some((kept, discarded)) = app.display_messages_split() {
+            let (mut lines, mut sources) =
+                build_log_lines(&kept, false, width, &cfg, &app.theme, display);
+            let (dim_lines_v, dim_sources) =
+                build_log_lines(&discarded, false, width, &cfg, &app.theme, display);
+            lines.extend(dim_lines(dim_lines_v));
+            sources.extend(dim_sources);
+            (lines, sources)
         } else {
             let combined = app.display_messages_combined();
-            let lines = build_log_lines(&combined, streaming, width, &cfg, &app.theme, display);
+            let (lines, sources) =
+                build_log_lines(&combined, streaming, width, &cfg, &app.theme, display);
 
             // Track the maximum total line count for padding during streaming.
             if streaming {
@@ -84,12 +88,13 @@ fn build_log_lines_cached<'a>(
                 }
             }
 
-            lines
+            (lines, sources)
         };
         let rev = app.log_view.log_cache.revision;
-        app.log_view.log_cache.cached_lines = Some((rev, width, step_cursor, lines));
+        app.log_view.log_cache.cached_lines = Some((rev, width, step_cursor, lines, sources));
     }
-    &app.log_view.log_cache.cached_lines.as_ref().unwrap().3
+    let cached = app.log_view.log_cache.cached_lines.as_ref().unwrap();
+    (cached.3.clone(), cached.4.clone())
 }
 
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
@@ -174,7 +179,10 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
 
     let display = app.display.clone();
 
-    let total_lines = build_log_lines_cached(app, log_width, &display).len();
+    let (cached_lines, hit_map) = build_log_lines_cached(app, log_width, &display);
+    let total_lines = cached_lines.len();
+    // Store hit map for mouse selection in the next event loop iteration.
+    app.mouse_select.hit_map = hit_map;
     let max_scroll = total_lines.saturating_sub(inner_height);
 
     if app.log_view.auto_scroll {
@@ -188,7 +196,9 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
                     full_output: app.log_view.full_output,
                     ..ToolBodyConfig::default()
                 };
-                build_log_lines(&kept, false, log_width, &cfg, &app.theme, &display).len()
+                build_log_lines(&kept, false, log_width, &cfg, &app.theme, &display)
+                    .0
+                    .len()
             })
             .unwrap_or(0);
         let half_height = inner_height / 2;
@@ -222,7 +232,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     };
 
     let visible_lines: Vec<Line<'static>> = {
-        let all = build_log_lines_cached(app, log_width, &display);
+        let all = cached_lines;
         if block_padding > 0 {
             // Anchor the viewport top at the content position it had before
             // the block shrank (max_total_lines - inner_height).  Show all
@@ -249,6 +259,14 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
             all[start..end].to_vec()
         }
     };
+
+    // ── Mouse selection highlight pass ────────────────────────────────────────
+    // Store visible lines on the mouse state for text extraction.
+    app.mouse_select.visible_lines = visible_lines.clone();
+    app.mouse_select.log_area_top = 0;
+    app.mouse_select.log_area_width = log_width as u16;
+    app.mouse_select.log_scroll = log_scroll;
+    let visible_lines = apply_mouse_highlight(visible_lines, app, log_scroll);
 
     let log_paragraph =
         Paragraph::new(Text::from(visible_lines)).block(Block::default().borders(Borders::NONE));
@@ -479,6 +497,99 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         );
         f.render_widget(Paragraph::new(vec![info_line]), info_area);
     }
+}
+
+/// Apply reverse-video highlighting to lines that are within the mouse
+/// drag selection range.
+fn apply_mouse_highlight(
+    mut lines: Vec<Line<'static>>,
+    app: &App,
+    log_scroll: usize,
+) -> Vec<Line<'static>> {
+    let (start_row, end_row, start_col, end_col) = match app.mouse_select.selection_range() {
+        Some(r) => r,
+        None => return lines,
+    };
+    let log_top = app.mouse_select.log_area_top;
+    let hit_map = &app.mouse_select.hit_map;
+
+    let highlight_style = Style::default().add_modifier(Modifier::REVERSED);
+
+    for (vi, line) in lines.iter_mut().enumerate() {
+        let abs_row = log_top + vi as u16;
+        if abs_row < start_row || abs_row > end_row {
+            continue;
+        }
+
+        let deco = hit_map
+            .get(log_scroll + vi)
+            .map(|ls| ls.decoration_width)
+            .unwrap_or(0);
+
+        // Clamp column bounds per row (matching extract_selected_text).
+        let (col_from, col_to) = if abs_row == start_row && abs_row == end_row {
+            (start_col.max(deco), end_col + 1)
+        } else if abs_row == start_row {
+            (start_col.max(deco), u16::MAX)
+        } else if abs_row == end_row {
+            (deco, end_col + 1)
+        } else {
+            (deco, u16::MAX)
+        };
+
+        // Walk spans, splitting at column boundaries so only the
+        // characters inside [col_from, col_to) get the highlight style.
+        let mut col: u16 = 0;
+        let mut new_spans: Vec<Span<'static>> = Vec::with_capacity(line.spans.len() * 2);
+
+        for s in &line.spans {
+            let content: &str = s.content.as_ref();
+            let span_width = unicode_width::UnicodeWidthStr::width(content) as u16;
+            let span_end = col + span_width;
+
+            // Entirely before selection or entirely after — pass through.
+            if span_end <= col_from || col >= col_to {
+                new_spans.push(s.clone());
+                col = span_end;
+                continue;
+            }
+
+            // Split into before / inside / after.
+            let mut char_col: u16 = col;
+            let mut before = String::new();
+            let mut inside = String::new();
+            let mut after = String::new();
+
+            for ch in content.chars() {
+                let chw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+                let ch_end = char_col + chw;
+                if ch_end <= col_from {
+                    before.push(ch);
+                } else if char_col >= col_to {
+                    after.push(ch);
+                } else {
+                    inside.push(ch);
+                }
+                char_col = ch_end;
+            }
+
+            if !before.is_empty() {
+                new_spans.push(Span::styled(before, s.style));
+            }
+            if !inside.is_empty() {
+                new_spans.push(Span::styled(inside, s.style.patch(highlight_style)));
+            }
+            if !after.is_empty() {
+                new_spans.push(Span::styled(after, s.style));
+            }
+
+            col = span_end;
+        }
+
+        line.spans = new_spans;
+    }
+
+    lines
 }
 
 #[cfg(test)]
@@ -1097,7 +1208,7 @@ mod tests {
     fn hidden_user_messages_are_not_rendered() {
         let mut hidden = Message::user("secret");
         hidden.hidden = true;
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &[hidden, Message::assistant("shown")],
             false,
             80,
@@ -1111,7 +1222,7 @@ mod tests {
 
     #[test]
     fn streaming_empty_assistant_message_is_not_rendered() {
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &[Message::assistant("")],
             true,
             80,
@@ -1124,7 +1235,7 @@ mod tests {
 
     #[test]
     fn stream_suffix_is_only_on_final_visible_chunk() {
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &[Message::assistant("abcdefghijklmnopqrstuvwxyz")],
             true,
             8,
@@ -1144,7 +1255,7 @@ mod tests {
 
     #[test]
     fn user_message_renders_block_edges() {
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &[Message::user("hi")],
             false,
             10,
@@ -1170,7 +1281,7 @@ mod tests {
             ),
         ];
 
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             120,
@@ -1194,7 +1305,7 @@ mod tests {
             ),
         ];
 
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             120,
@@ -1219,7 +1330,7 @@ mod tests {
             Message::tool_result("1", &long_output, false),
         ];
 
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             300,
@@ -1239,7 +1350,7 @@ mod tests {
             json!({"command": "echo one\necho two\necho three"}),
         )];
 
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             120,
@@ -1262,7 +1373,7 @@ mod tests {
             json!({"command": "l1\nl2\nl3\nl4\nl5\nl6"}),
         )];
 
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             120,
@@ -1281,7 +1392,7 @@ mod tests {
     #[test]
     fn assistant_lines_are_prefixed_with_speech_bubble() {
         let messages = vec![Message::assistant("hello")];
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             80,
@@ -1296,7 +1407,7 @@ mod tests {
     fn assistant_provisional_phase_uses_thought_bubble() {
         let mut msg = Message::assistant("working");
         msg.assistant_phase = Some(AssistantPhase::Provisional);
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &[msg],
             false,
             80,
@@ -1311,7 +1422,7 @@ mod tests {
     fn assistant_unknown_phase_streaming_uses_thought_bubble() {
         let mut msg = Message::assistant("streaming");
         msg.assistant_phase = Some(AssistantPhase::Unknown);
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &[msg],
             true,
             80,
@@ -1327,7 +1438,7 @@ mod tests {
         let mut msg = Message::assistant("answer");
         msg.thinking = Some("planning".to_string());
         let messages = vec![msg];
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             80,
@@ -1707,7 +1818,7 @@ mod tests {
             Message::tool_result("1", "\n\n  output line  \n\n", false),
         ];
 
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             80,
@@ -1743,7 +1854,7 @@ mod tests {
             Message::tool_result("1", "    indented output", false),
         ];
 
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             80,
@@ -1777,7 +1888,7 @@ mod tests {
             Message::tool_result("1", "load: 1.0\n", false),
         ];
 
-        let lines = log::build_log_lines(
+        let (lines, _) = log::build_log_lines(
             &messages,
             false,
             80,

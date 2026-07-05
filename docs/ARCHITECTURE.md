@@ -15,6 +15,7 @@ src/
   app.rs               — App state, event handling, submission, scroll
   ui.rs                — all ratatui rendering, pre-wrapping, scroll logic
   markdown.rs          — markdown → ratatui Lines renderer (paragraphs, headings, code, tables, lists)
+  mouse_select.rs      — click-drag text selection and copy in the log view
   commands/
     mod.rs             — slash-command registry (COMMANDS, SlashCommand, CommandAction, parse)
   completion.rs        — CompletionItem and completions_for (completion popup logic)

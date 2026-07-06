@@ -32,6 +32,7 @@ use crate::provider_manager::{
 use crate::selection_state::{SelectionKind, SelectionState};
 use crate::session_event::SessionEvent;
 use crate::session_manager::SessionManager;
+use crate::shell::ShellKind;
 use crate::shell_state::ShellState;
 use crate::step_back_state::StepBackState;
 use crate::tracked::Tracked;
@@ -724,13 +725,34 @@ impl App {
             tx: Some(tx.clone()),
         };
 
+        let selected_shell = self.shell.selected;
         self.runtime.pending_shell_handle = Some(tokio::spawn(async move {
-            let result = crate::agent::tools::subprocess::SubprocessCommand::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .current_dir(&cwd)
-                .run(ctx)
-                .await;
+            let cmd = match selected_shell {
+                ShellKind::Bash => crate::agent::tools::subprocess::SubprocessCommand::new("sh")
+                    .arg("-c")
+                    .arg(&command),
+                #[cfg(windows)]
+                ShellKind::Cmd => {
+                    crate::agent::tools::subprocess::SubprocessCommand::new("cmd.exe")
+                        .arg("/D")
+                        .arg("/S")
+                        .arg("/C")
+                        .raw_arg(format!("\"{command}\""))
+                }
+                #[cfg(windows)]
+                ShellKind::PowerShell => {
+                    crate::agent::tools::subprocess::SubprocessCommand::new("pwsh.exe")
+                        .arg("-NoLogo")
+                        .arg("-NoProfile")
+                        .arg("-NonInteractive")
+                        .arg("-ExecutionPolicy")
+                        .arg("Bypass")
+                        .arg("-Command")
+                        .arg(&command)
+                }
+            };
+
+            let result = cmd.current_dir(&cwd).run(ctx).await;
             let _ = tx.send(AppEvent::ShellComplete { call_id, result });
         }));
     }
@@ -2832,6 +2854,8 @@ mod tests {
             "fresh session should have no session_state"
         );
 
+        #[cfg(windows)]
+        app.shell.textarea.insert_str("Write-Output fresh");
         #[cfg(not(windows))]
         app.shell.textarea.insert_str("printf 'fresh'");
 

@@ -103,7 +103,6 @@ impl SubprocessCommand {
     }
 
     /// Set the working directory for the child process.
-    #[cfg(not(target_os = "windows"))]
     pub fn current_dir(mut self, dir: impl Into<String>) -> Self {
         self.current_dir = Some(dir.into());
         self

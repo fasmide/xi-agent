@@ -149,6 +149,7 @@ impl App {
                         id: call_id.clone(),
                         name: "read_file".to_string(),
                         args,
+                        include_in_llm: true,
                         timestamp: ts,
                     });
                     self.session
@@ -158,6 +159,7 @@ impl App {
                             content: content.clone(),
                             is_error: false,
                             display_range: None,
+                            include_in_llm: true,
                             timestamp: ts,
                         });
                 }
@@ -173,6 +175,7 @@ impl App {
                         id: call_id.clone(),
                         name: "read_file".to_string(),
                         args,
+                        include_in_llm: true,
                         timestamp: ts,
                     });
                     // Inline the image as a data URI directly in the content
@@ -188,6 +191,7 @@ impl App {
                             content,
                             is_error: false,
                             display_range: None,
+                            include_in_llm: true,
                             timestamp: ts,
                         });
                     // No need for pending_attachment_images — image is inline.
@@ -347,6 +351,7 @@ impl App {
                     content: "Interrupted by user".to_string(),
                     is_error: true,
                     display_range: None,
+                    include_in_llm: true,
                     timestamp: Self::now_ts(),
                 });
         }

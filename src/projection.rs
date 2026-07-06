@@ -117,19 +117,30 @@ fn push_llm_message(msgs: &mut Vec<Message>, ev: &SessionEvent) {
             msg.assistant_phase = Some(*phase);
             msgs.push(msg);
         }
-        SessionEvent::ToolCall { id, name, args, .. } => {
-            msgs.push(Message::tool_call(id.clone(), name.clone(), args.clone()));
+        SessionEvent::ToolCall {
+            id,
+            name,
+            args,
+            include_in_llm,
+            ..
+        } => {
+            if *include_in_llm {
+                msgs.push(Message::tool_call(id.clone(), name.clone(), args.clone()));
+            }
         }
         SessionEvent::ToolResult {
             id,
             content,
             is_error,
             display_range,
+            include_in_llm,
             ..
         } => {
-            let mut msg = Message::tool_result(id.clone(), content.clone(), *is_error);
-            msg.display_range = display_range.clone();
-            msgs.push(msg);
+            if *include_in_llm {
+                let mut msg = Message::tool_result(id.clone(), content.clone(), *is_error);
+                msg.display_range = display_range.clone();
+                msgs.push(msg);
+            }
         }
         // Not sent to the LLM.
         SessionEvent::TurnError { .. }
@@ -185,11 +196,18 @@ fn push_display_message(msgs: &mut Vec<Message>, ev: &SessionEvent) {
             msg.assistant_phase = Some(*phase);
             msgs.push(msg);
         }
-        SessionEvent::ToolCall { id, name, args, .. } => {
+        SessionEvent::ToolCall {
+            id,
+            name,
+            args,
+            include_in_llm,
+            ..
+        } => {
             let mut msg = Message::tool_call(id.clone(), name.clone(), args.clone());
             if id.starts_with("attach_") {
                 msg.hidden = true;
             }
+            msg.include_in_llm = *include_in_llm;
             msgs.push(msg);
         }
         SessionEvent::ToolResult {
@@ -197,6 +215,7 @@ fn push_display_message(msgs: &mut Vec<Message>, ev: &SessionEvent) {
             content,
             is_error,
             display_range,
+            include_in_llm,
             ..
         } => {
             let mut msg = Message::tool_result(id.clone(), content.clone(), *is_error);
@@ -204,6 +223,7 @@ fn push_display_message(msgs: &mut Vec<Message>, ev: &SessionEvent) {
             if id.starts_with("attach_") {
                 msg.hidden = true;
             }
+            msg.include_in_llm = *include_in_llm;
             msgs.push(msg);
         }
         SessionEvent::TurnError { message, .. } => {
@@ -466,6 +486,7 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             args: serde_json::json!({"path": "src/main.rs"}),
+            include_in_llm: true,
             timestamp: ts(),
         }
     }
@@ -477,6 +498,7 @@ mod tests {
             content: content.to_string(),
             is_error: false,
             display_range: None,
+            include_in_llm: true,
             timestamp: ts(),
         }
     }
@@ -678,6 +700,7 @@ mod tests {
                 last_line: 10,
                 total_lines: 100,
             }),
+            include_in_llm: true,
             timestamp: ts(),
         }];
         let msgs = project_llm_messages(&events);

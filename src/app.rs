@@ -13,7 +13,6 @@ use crate::{
     provider_instance::{ApiType, BackendPreset, ProviderInstance},
     session::SessionStore,
     session_state::SessionState,
-    shell,
     skills::SkillMeta,
     theme::Theme,
     thinking::ThinkingLevel,
@@ -676,6 +675,9 @@ impl App {
             return;
         }
 
+        // Ensure a session exists so the appended events are persisted.
+        self.ensure_event_log_for_submit();
+
         let cwd = if self.session.current_cwd.is_empty() {
             ".".to_string()
         } else {
@@ -690,42 +692,47 @@ impl App {
         };
 
         let call_id = format!("local-shell-{}", self.display_len());
-        let mut call_msg = Message::tool_call(
-            call_id.clone(),
-            "local_shell",
-            serde_json::json!({
-                "prefix": cmd_prefix,
-                "command": command,
-            }),
-        );
-        call_msg.include_in_llm = false;
-        self.session.live_turn.notices.push(call_msg);
 
-        let output = shell::run_shell_command_blocking(self.shell.selected, &cwd, &command);
-        let mut body = String::new();
-        if !output.stdout.is_empty() {
-            body.push_str(&output.stdout);
-            if !output.stdout.ends_with('\n') {
-                body.push('\n');
-            }
-        }
-        if !output.stderr.is_empty() {
-            body.push_str(&output.stderr);
-            if !output.stderr.ends_with('\n') {
-                body.push('\n');
-            }
-        }
-        if output.exit_code != 0 {
-            body.push_str(&format!("exit {}\n", output.exit_code));
-        }
+        // Push a live tool entry so the UI renders the tool-call header and
+        // live streaming output (via ToolOutputChunk events forwarded from the
+        // subprocess).
+        self.session
+            .live_turn
+            .tool_entries
+            .push(crate::live_turn::LiveToolEntry {
+                id: call_id.clone(),
+                name: "local_shell".to_string(),
+                args: serde_json::json!({
+                    "prefix": cmd_prefix,
+                    "command": command,
+                }),
+                partial_args: String::new(),
+                partial_snapshot: None,
+                streaming_field: Some("command".to_string()),
+                running_output: String::new(),
+                result: None,
+            });
 
-        let mut out_msg = Message::tool_result(call_id, body, output.exit_code != 0);
-        out_msg.include_in_llm = false;
-        self.session.live_turn.notices.push(out_msg);
-
-        self.persist_messages();
         self.exit_shell_mode();
         self.log_view.auto_scroll = true;
+
+        // Spawn the subprocess asynchronously, reusing the same execution
+        // infrastructure as agent tools (SubprocessCommand + ToolCallContext).
+        let tx = self.app_event_tx();
+        let ctx = crate::agent::types::ToolCallContext {
+            id: call_id.clone(),
+            tx: Some(tx.clone()),
+        };
+
+        self.runtime.pending_shell_handle = Some(tokio::spawn(async move {
+            let result = crate::agent::tools::subprocess::SubprocessCommand::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .current_dir(&cwd)
+                .run(ctx)
+                .await;
+            let _ = tx.send(AppEvent::ShellComplete { call_id, result });
+        }));
     }
 
     /// True when the input is a single line beginning with `/`.
@@ -1336,9 +1343,11 @@ mod tests {
             AgentLoopConfig,
             types::{AskRequest, AskUserOption, AskUserResponse},
         },
+        app_event::AppEvent,
         llm::{Message, ProviderError, Role},
         provider_instance::{ApiType, BackendPreset, ProviderInstance},
         provider_manager::{PendingProviderSetup, SetupInputKind},
+        session_event::SessionEvent,
         thinking::ThinkingLevel,
     };
 
@@ -2105,6 +2114,7 @@ mod tests {
                     id: "call_1".to_string(),
                     name: "powershell".to_string(),
                     args: serde_json::json!({"command": "git diff"}),
+                    include_in_llm: true,
                     timestamp: 1,
                 });
             app.session
@@ -2156,6 +2166,7 @@ mod tests {
                     id: "call_1".to_string(),
                     name: "ask_user".to_string(),
                     args: serde_json::json!({"question": "Continue?"}),
+                    include_in_llm: true,
                     timestamp: 1,
                 });
             app.session
@@ -2226,6 +2237,7 @@ mod tests {
                     id: "call_1".to_string(),
                     name: "powershell".to_string(),
                     args: serde_json::json!({"command": "git diff"}),
+                    include_in_llm: true,
                     timestamp: 1,
                 });
             app.session
@@ -2236,6 +2248,7 @@ mod tests {
                     content: "done".to_string(),
                     is_error: false,
                     display_range: None,
+                    include_in_llm: true,
                     timestamp: 1,
                 });
 
@@ -2580,6 +2593,7 @@ mod tests {
                 id: "c1".to_string(),
                 name: "read_file".to_string(),
                 args: serde_json::json!({"path": "src/main.rs"}),
+                include_in_llm: true,
                 timestamp: 1,
             });
 
@@ -2732,8 +2746,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shell_output_is_ui_only_and_excluded_from_event_log_and_llm() {
+    #[tokio::test]
+    async fn shell_output_is_ui_only_and_excluded_from_event_log_and_llm() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("session.jsonl");
         let mut app = make_app();
@@ -2748,34 +2762,53 @@ mod tests {
 
         app.submit_shell_command();
 
+        // Async: wait for the ShellComplete event from the spawned task.
+        // Don't dispatch through apply_app_event in the loop because
+        // drain_app_events (called by Agent handling) would greedily
+        // consume ShellComplete before this loop can observe it.
+        let complete_ev = loop {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                app.runtime.recv_app_event(),
+            )
+            .await
+            {
+                Ok(Some(ev @ AppEvent::ShellComplete { .. })) => break ev,
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("shell channel closed unexpectedly"),
+                Err(_) => panic!("shell command timed out after 5s"),
+            }
+        };
+
+        // Dispatch the ShellComplete and any remaining buffered events.
+        app.apply_app_event(complete_ev);
+
+        // After completion, the live entry should be removed and events
+        // persisted in the session state.
         assert!(
-            app.session
-                .live_turn
-                .notices
-                .iter()
-                .any(|m| m.role == Role::ToolCall && m.tool_call_id.as_deref().is_some()),
-            "shell tool call should appear in UI notices"
-        );
-        assert!(
-            app.session
-                .live_turn
-                .notices
-                .iter()
-                .any(|m| m.role == Role::ToolResult && m.content.contains("hello")),
-            "shell tool result should appear in UI notices"
+            app.session.live_turn.tool_entries.is_empty(),
+            "shell live entry should be removed after completion"
         );
 
+        // Shell events should be persisted in the event log with include_in_llm=false.
         let events = app
             .session
             .session_state
             .as_ref()
             .expect("session state")
             .events();
-        assert!(
-            events.is_empty(),
-            "shell output must not enter the event log"
-        );
+        let has_tool_call = events.iter().any(|e| {
+            matches!(e, SessionEvent::ToolCall { name, include_in_llm, .. }
+                if name == "local_shell" && !include_in_llm)
+        });
+        let has_tool_result = events.iter().any(|e| {
+            matches!(e, SessionEvent::ToolResult { name, include_in_llm, .. }
+                if name == "local_shell" && !include_in_llm)
+        });
+        assert!(has_tool_call, "shell tool call must be persisted");
+        assert!(has_tool_result, "shell tool result must be persisted");
 
+        // Shell events must NOT appear in the LLM projection.
         let llm = app
             .session
             .session_state
@@ -2784,6 +2817,63 @@ mod tests {
             .llm_messages()
             .to_vec();
         assert!(llm.is_empty(), "shell output must not enter LLM history");
+    }
+
+    #[tokio::test]
+    async fn shell_command_persists_in_fresh_session_without_prior_chat() {
+        // In a fresh session with no session_state yet, shell commands should
+        // still persist via ensure_event_log_for_submit.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = make_app();
+        app.session.current_cwd = tmp.path().to_string_lossy().to_string();
+        // Don't set session_state — simulate fresh session.
+        assert!(
+            app.session.session_state.is_none(),
+            "fresh session should have no session_state"
+        );
+
+        #[cfg(not(windows))]
+        app.shell.textarea.insert_str("printf 'fresh'");
+
+        app.submit_shell_command();
+
+        // Wait for completion.
+        loop {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                app.runtime.recv_app_event(),
+            )
+            .await
+            {
+                Ok(Some(ev @ AppEvent::ShellComplete { .. })) => {
+                    app.apply_app_event(ev);
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) => panic!("channel closed"),
+                Err(_) => panic!("timed out"),
+            }
+        }
+
+        // Session state should now exist and contain the shell events.
+        let ss = app
+            .session
+            .session_state
+            .as_ref()
+            .expect("session state should exist after shell command");
+        let events = ss.events();
+        assert!(
+            events.iter().any(|e| matches!(e, SessionEvent::ToolCall {
+                name, ..
+            } if name == "local_shell")),
+            "shell tool call must be persisted in fresh session"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, SessionEvent::ToolResult {
+                name, ..
+            } if name == "local_shell")),
+            "shell tool result must be persisted in fresh session"
+        );
     }
 
     #[test]
@@ -2921,6 +3011,7 @@ mod tests {
             content: answer.to_string(),
             is_error: false,
             display_range: None,
+            include_in_llm: true,
             timestamp: ts(),
         }
     }
@@ -2930,6 +3021,7 @@ mod tests {
             id: "ask_1".to_string(),
             name: "ask_user".to_string(),
             args: serde_json::json!({"question": question}),
+            include_in_llm: true,
             timestamp: ts(),
         }
     }
@@ -2950,6 +3042,7 @@ mod tests {
                 "options": opts,
                 "allowFreeform": true,
             }),
+            include_in_llm: true,
             timestamp: ts(),
         }
     }
@@ -2961,6 +3054,7 @@ mod tests {
             content: "output".to_string(),
             is_error: false,
             display_range: None,
+            include_in_llm: true,
             timestamp: ts(),
         }
     }
@@ -3169,6 +3263,7 @@ mod tests {
                 id: "t1".to_string(),
                 name: "bash".to_string(),
                 args: serde_json::json!({"command": "ls"}),
+                include_in_llm: true,
                 timestamp: ts(),
             },
             crate::session_event::SessionEvent::ToolResult {
@@ -3177,6 +3272,7 @@ mod tests {
                 content: "ok".to_string(),
                 is_error: false,
                 display_range: None,
+                include_in_llm: true,
                 timestamp: ts(),
             },
         ];
@@ -3228,6 +3324,7 @@ mod tests {
                 id: "bash1".to_string(),
                 name: "bash".to_string(),
                 args: serde_json::json!({"command": "ls"}),
+                include_in_llm: true,
                 timestamp: ts(),
             },
             crate::session_event::SessionEvent::ToolResult {
@@ -3236,6 +3333,7 @@ mod tests {
                 content: "output".to_string(),
                 is_error: false,
                 display_range: None,
+                include_in_llm: true,
                 timestamp: ts(),
             },
             // The ask_user turn:
@@ -3294,6 +3392,7 @@ mod tests {
                 id: "ask_2".to_string(),
                 name: "ask_user".to_string(),
                 args: serde_json::json!({"question": "second q"}),
+                include_in_llm: true,
                 timestamp: ts(),
             },
         ];

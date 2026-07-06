@@ -528,6 +528,7 @@ mod tests {
                 id: "c1".to_string(),
                 name: "read_file".to_string(),
                 args: serde_json::json!({"path":"src/main.rs"}),
+                include_in_llm: true,
                 timestamp: 3,
             },
             SessionEvent::ToolResult {
@@ -540,6 +541,7 @@ mod tests {
                     last_line: 2,
                     total_lines: 2,
                 }),
+                include_in_llm: true,
                 timestamp: 4,
             },
         ]);
@@ -564,12 +566,14 @@ mod tests {
                 id: "1".to_string(),
                 name: "read_file".to_string(),
                 args: serde_json::json!({"path":"src/app.rs"}),
+                include_in_llm: true,
                 timestamp: 1,
             },
             SessionEvent::ToolCall {
                 id: "2".to_string(),
                 name: "edit_file".to_string(),
                 args: serde_json::json!({"path":"src/main.rs"}),
+                include_in_llm: true,
                 timestamp: 2,
             },
         ]);

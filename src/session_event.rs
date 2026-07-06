@@ -52,6 +52,10 @@ use crate::{
     thinking::ThinkingLevel,
 };
 
+fn default_true() -> bool {
+    true
+}
+
 /// A single durable event in the session log.
 ///
 /// See the [module documentation](self) for serialization format and append
@@ -87,6 +91,10 @@ pub enum SessionEvent {
         name: String,
         /// Arguments passed to the tool (JSON object).
         args: serde_json::Value,
+        /// When false, excluded from the LLM projection.  Used for local shell
+        /// commands that are visible in the session log but never sent to the model.
+        #[serde(default = "default_true")]
+        include_in_llm: bool,
         timestamp: u64,
     },
 
@@ -109,6 +117,10 @@ pub enum SessionEvent {
         is_error: bool,
         /// Line-range metadata when only a window of a file was returned.
         display_range: Option<DisplayRange>,
+        /// When false, excluded from the LLM projection.  Used for local shell
+        /// commands that are visible in the session log but never sent to the model.
+        #[serde(default = "default_true")]
+        include_in_llm: bool,
         timestamp: u64,
     },
 
@@ -234,6 +246,7 @@ mod tests {
             id: "call_1".to_string(),
             name: "read_file".to_string(),
             args: serde_json::json!({"path": "src/main.rs"}),
+            include_in_llm: true,
             timestamp: ts(),
         };
         let json = serde_json::to_string(&ev).unwrap();
@@ -252,6 +265,7 @@ mod tests {
             content: "fn main() {}".to_string(),
             is_error: false,
             display_range: None,
+            include_in_llm: true,
             timestamp: ts(),
         };
         let json = serde_json::to_string(&ev).unwrap();
@@ -368,6 +382,7 @@ mod tests {
                     id: String::new(),
                     name: String::new(),
                     args: serde_json::Value::Null,
+                    include_in_llm: true,
                     timestamp: ts(),
                 },
                 "tool_call",
@@ -379,6 +394,7 @@ mod tests {
                     content: String::new(),
                     is_error: false,
                     display_range: None,
+                    include_in_llm: true,
                     timestamp: ts(),
                 },
                 "tool_result",

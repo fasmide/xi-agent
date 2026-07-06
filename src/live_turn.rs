@@ -185,6 +185,14 @@ impl LiveTurnState {
     pub fn find_tool_entry_mut(&mut self, id: &str) -> Option<&mut LiveToolEntry> {
         self.tool_entries.iter_mut().find(|e| e.id == id)
     }
+
+    /// Remove and return the tool entry with the given call ID.
+    pub fn remove_tool_entry(&mut self, id: &str) -> Option<LiveToolEntry> {
+        self.tool_entries
+            .iter()
+            .position(|e| e.id == id)
+            .map(|pos| self.tool_entries.remove(pos))
+    }
 }
 
 /// Build display messages for the UI: committed history + live overlay.

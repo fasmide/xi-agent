@@ -50,6 +50,7 @@ impl App {
             AppEvent::ModelsReady(result) => self.apply_model_list(result),
             AppEvent::Login(ev) => self.apply_login_event(ev),
             AppEvent::AskUser(req) => self.receive_ask_request(req),
+            AppEvent::ShellComplete { call_id, result } => self.on_shell_complete(call_id, result),
         }
     }
 
@@ -274,6 +275,7 @@ impl App {
                 id,
                 name,
                 args,
+                include_in_llm: true,
                 timestamp: Self::now_ts(),
             });
     }
@@ -331,8 +333,65 @@ impl App {
                 content: result.content.as_text().to_string(),
                 is_error: result.is_error,
                 display_range,
+                include_in_llm: true,
                 timestamp: Self::now_ts(),
             });
+    }
+
+    fn on_shell_complete(&mut self, call_id: String, result: crate::agent::types::ToolResult) {
+        // Persist the tool call and result as session events (visible in UI,
+        // excluded from LLM projection).
+        let ts = Self::now_ts();
+
+        // Extract the command/prefix from the live entry before removing it.
+        let (name, args) = if let Some(entry) = self.session.live_turn.find_tool_entry_mut(&call_id)
+        {
+            // Set the result on the live entry so it renders as complete.
+            entry.running_output.clear();
+            entry.result = Some(crate::live_turn::LiveToolResult {
+                content: result.content.as_text().to_string(),
+                is_error: result.is_error,
+                display_range: result
+                    .truncation
+                    .as_ref()
+                    .map(|tr| crate::llm::DisplayRange {
+                        first_line: tr.first_kept_line,
+                        last_line: tr.first_kept_line + tr.output_lines - 1,
+                        total_lines: tr.total_lines,
+                    }),
+                image_data: result.content.image_base64().map(|(mime, b64)| {
+                    crate::llm::ImageData {
+                        base64: b64,
+                        mime_type: mime.to_string(),
+                    }
+                }),
+            });
+            (entry.name.clone(), entry.args.clone())
+        } else {
+            return;
+        };
+
+        let content = result.content.as_text().to_string();
+        self.append_event_immediate(SessionEvent::ToolCall {
+            id: call_id.clone(),
+            name,
+            args,
+            include_in_llm: false,
+            timestamp: ts,
+        });
+        self.append_event_immediate(SessionEvent::ToolResult {
+            id: call_id.clone(),
+            name: "local_shell".to_string(),
+            content,
+            is_error: result.is_error,
+            display_range: None,
+            include_in_llm: false,
+            timestamp: ts,
+        });
+
+        // Remove the live entry now that committed events render it.
+        self.session.live_turn.remove_tool_entry(&call_id);
+        self.runtime.pending_shell_handle = None;
     }
 
     fn on_external_file_change(&mut self, notification: String) {

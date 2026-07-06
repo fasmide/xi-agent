@@ -230,6 +230,7 @@ mod tests {
             id: "call_1".to_string(),
             name: "read_file".to_string(),
             args: serde_json::json!({"path": "src/main.rs"}),
+            include_in_llm: true,
             timestamp: ts(),
         }
     }
@@ -241,6 +242,7 @@ mod tests {
             content: "fn main() {}".to_string(),
             is_error: false,
             display_range: None,
+            include_in_llm: true,
             timestamp: ts(),
         }
     }

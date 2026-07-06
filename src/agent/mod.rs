@@ -109,6 +109,7 @@ fn record_tool_call_result(
         id: id.to_string(),
         name: name.to_string(),
         args,
+        include_in_llm: true,
         timestamp: 0,
     });
     session_events.push(SessionEvent::ToolResult {
@@ -117,6 +118,7 @@ fn record_tool_call_result(
         content: result.content.as_text().to_string(),
         is_error: result.is_error,
         display_range: None,
+        include_in_llm: true,
         timestamp: 0,
     });
 }

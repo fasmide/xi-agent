@@ -1,7 +1,7 @@
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    agent::types::{AgentEvent, AskRequest},
+    agent::types::{AgentEvent, AskRequest, ToolResult},
     auth::LoginEvent,
     llm::ProviderError,
 };
@@ -13,6 +13,11 @@ pub enum AppEvent {
     ModelsReady(Result<Vec<String>, ProviderError>),
     Login(LoginEvent),
     AskUser(AskRequest),
+    /// A local shell command subprocess has finished.
+    ShellComplete {
+        call_id: String,
+        result: ToolResult,
+    },
 }
 
 pub type AppEventTx = UnboundedSender<AppEvent>;

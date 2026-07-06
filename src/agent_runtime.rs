@@ -38,6 +38,8 @@ pub(crate) struct AgentRuntime {
     /// [`submit`]: crate::app_submission::App::submit
     /// [`submit_with_text`]: crate::app_submission::App::submit_with_text
     pub(crate) pending_finalize: bool,
+    /// Handle for a running local shell command spawned async.
+    pub(crate) pending_shell_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AgentRuntime {
@@ -51,6 +53,7 @@ impl AgentRuntime {
             agent_task: None,
             cancel_tx: None,
             pending_finalize: false,
+            pending_shell_handle: None,
         }
     }
 

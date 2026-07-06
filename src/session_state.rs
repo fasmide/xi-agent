@@ -389,6 +389,7 @@ mod tests {
                     id: "c1".to_string(),
                     name: "read_file".to_string(),
                     args: serde_json::json!({}),
+                    include_in_llm: true,
                     timestamp: ts(),
                 },
             ])

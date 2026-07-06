@@ -741,14 +741,7 @@ impl App {
                 }
                 #[cfg(windows)]
                 ShellKind::PowerShell => {
-                    crate::agent::tools::subprocess::SubprocessCommand::new("pwsh.exe")
-                        .arg("-NoLogo")
-                        .arg("-NoProfile")
-                        .arg("-NonInteractive")
-                        .arg("-ExecutionPolicy")
-                        .arg("Bypass")
-                        .arg("-Command")
-                        .arg(&command)
+                    crate::agent::tools::powershell::powershell_subprocess(&command)
                 }
             };
 

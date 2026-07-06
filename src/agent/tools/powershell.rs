@@ -59,18 +59,20 @@ impl Tool for PowerShellTool {
                 Err(e) => return *e,
             };
 
-            SubprocessCommand::new(preferred_powershell_program())
-                .arg("-NoLogo")
-                .arg("-NoProfile")
-                .arg("-NonInteractive")
-                .arg("-ExecutionPolicy")
-                .arg("Bypass")
-                .arg("-Command")
-                .arg(command)
-                .run(ctx)
-                .await
+            powershell_subprocess(command).run(ctx).await
         })
     }
+}
+
+pub(crate) fn powershell_subprocess(command: impl Into<String>) -> SubprocessCommand {
+    SubprocessCommand::new(preferred_powershell_program())
+        .arg("-NoLogo")
+        .arg("-NoProfile")
+        .arg("-NonInteractive")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(command)
 }
 
 #[cfg(windows)]

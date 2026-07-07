@@ -151,51 +151,19 @@ pub fn build_provider_for_instance(
                 creds.base_url.as_deref().unwrap_or("<from-token>"),
                 route,
             );
-            match route {
-                CopilotApiRoute::OpenAiResponses => {
-                    let base_url = creds.base_url.clone().unwrap_or_else(|| {
-                        crate::auth::copilot::extract_base_url(&creds.access_token)
-                            .unwrap_or_else(|| "https://api.githubcopilot.com".to_string())
-                    });
-                    let responses_url = format!("{}/v1/responses", base_url.trim_end_matches('/'));
-                    let p = CodexProvider::new_with_headers(
-                        responses_url,
-                        model,
-                        creds.access_token,
-                        vec![
-                            (
-                                "User-Agent".to_string(),
-                                "GitHubCopilotChat/0.35.0".to_string(),
-                            ),
-                            ("Editor-Version".to_string(), "vscode/1.107.0".to_string()),
-                            (
-                                "Editor-Plugin-Version".to_string(),
-                                "copilot-chat/0.35.0".to_string(),
-                            ),
-                            (
-                                "Copilot-Integration-Id".to_string(),
-                                "vscode-chat".to_string(),
-                            ),
-                            ("X-Initiator".to_string(), "user".to_string()),
-                            (
-                                "Openai-Intent".to_string(),
-                                "conversation-edits".to_string(),
-                            ),
-                        ],
-                    )
-                    .with_reasoning_effort(thinking.to_reasoning_effort_string());
-                    Ok(Arc::new(p))
-                }
-                _ => {
-                    let p = CopilotProvider::new(
-                        &creds.access_token,
-                        model,
-                        creds.base_url.as_deref(),
-                        thinking.to_reasoning_effort_string(),
-                    );
-                    Ok(Arc::new(p))
-                }
-            }
+            // Invariant: all Copilot models must keep Copilot-owned model
+            // discovery via CopilotProvider::list_models(), even when the
+            // active chat transport routes to the Responses API internally.
+            // Returning a raw CodexProvider here regresses the model picker to
+            // CodexProvider::list_models(), which only exposes static Codex
+            // endpoint models.
+            let p = CopilotProvider::new(
+                &creds.access_token,
+                model,
+                creds.base_url.as_deref(),
+                thinking.to_reasoning_effort_string(),
+            );
+            Ok(Arc::new(p))
         }
         BackendPreset::Codex => {
             let store = AuthStore::load_default()?;
@@ -348,11 +316,20 @@ pub fn build_provider_for_instance(
 #[cfg(test)]
 mod tests {
     use super::{
-        CopilotApiRoute, ThinkingSupport, classify_copilot_route, thinking_support_for_instance,
+        CopilotApiRoute, ThinkingSupport, build_provider_for_instance, classify_copilot_route,
+        thinking_support_for_instance,
     };
+    use crate::auth::types::{AuthFile, ProviderCredentials};
+    use crate::config::XiConfig;
     use crate::llm::copilot::test_helpers;
     use crate::provider_instance::{ApiType, BackendPreset, ProviderInstance};
     use crate::thinking::{GeminiThinkingLevel, ThinkingLevel};
+    use std::{env, fs, sync::Mutex};
+    use tempfile::TempDir;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
 
     #[test]
     fn copilot_route_uses_responses_for_codex_models() {
@@ -444,6 +421,87 @@ mod tests {
         assert_eq!(
             classify_copilot_route("__openai_vendor_model__"),
             CopilotApiRoute::OpenAiChatCompletions
+        );
+    }
+
+    static AUTH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_temp_auth_file(auth: &AuthFile) -> TempDir {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("auth.toml");
+        let text = toml::to_string_pretty(auth).expect("serialize auth file");
+        fs::write(&path, text).expect("write auth file");
+        dir
+    }
+
+    #[tokio::test]
+    async fn copilot_responses_route_still_lists_models_via_copilot_models_endpoint() {
+        let mock_server = MockServer::start().await;
+
+        let mut auth = AuthFile::default();
+        auth.providers.insert(
+            "copilot".to_string(),
+            ProviderCredentials::Copilot {
+                access_token: "copilot-test-token".to_string(),
+                refresh_token: "copilot-test-refresh".to_string(),
+                expires_at: 9_999_999_999,
+                base_url: Some(mock_server.uri()),
+            },
+        );
+        let tempdir = with_temp_auth_file(&auth);
+
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(header("authorization", "Bearer copilot-test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{
+                    "data": [
+                        {
+                            "id": "copilot-from-api-1",
+                            "vendor": "Azure OpenAI",
+                            "capabilities": { "limits": { "max_context_window_tokens": 128000 } }
+                        },
+                        {
+                            "id": "copilot-from-api-2",
+                            "vendor": "Anthropic",
+                            "capabilities": { "limits": { "max_context_window_tokens": 200000 } }
+                        }
+                    ]
+                }"#,
+                "application/json",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let mut instance = ProviderInstance::new("copilot", BackendPreset::Copilot);
+        instance.model = Some("gpt-5.3-codex".to_string());
+
+        let provider = {
+            let _guard = AUTH_ENV_LOCK.lock().expect("lock auth env");
+            // SAFETY: protected by AUTH_ENV_LOCK in this test module.
+            unsafe { env::set_var("XI_AUTH_FILE", tempdir.path().join("auth.toml")) };
+            let provider = build_provider_for_instance(
+                &instance,
+                ThinkingLevel::Minimal,
+                &XiConfig::default(),
+            )
+            .expect("build provider");
+            // SAFETY: protected by AUTH_ENV_LOCK in this test module.
+            unsafe { env::remove_var("XI_AUTH_FILE") };
+            provider
+        };
+        let models = provider.list_models().await.expect("list models");
+
+        assert_eq!(
+            models,
+            vec![
+                "copilot-from-api-1".to_string(),
+                "copilot-from-api-2".to_string(),
+            ]
+        );
+        assert!(
+            !models.iter().any(|m| m == "gpt-5.4"),
+            "should not fall back to CodexProvider::known_models()"
         );
     }
 }

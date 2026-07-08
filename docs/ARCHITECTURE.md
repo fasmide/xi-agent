@@ -1,5 +1,9 @@
 # Architecture
 
+> See [GLOSSARY.md](GLOSSARY.md) for definitions of *session*, *agent loop*,
+> *turn*, *LLM invocation*, *tool call*, *steering message*, *compaction*,
+> and *projection*.
+
 ## Purpose
 
 `xi-agent` is a terminal AI agent harness. It provides a streaming TUI for

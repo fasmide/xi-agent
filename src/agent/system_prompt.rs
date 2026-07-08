@@ -5,31 +5,47 @@ use std::{fs, path::Path};
 use crate::agent::types::ToolRegistry;
 use crate::skills::SkillMeta;
 
+/// Read the first existing AGENTS.md candidate from a base directory.
+///
+/// Priority: `.xi/AGENTS.md` → `.agents/AGENTS.md` → `AGENTS.md`.
+/// Returns `Some(content)` for the first match, or `None` if none exist.
+fn read_directory_agents(base: &Path) -> Option<String> {
+    let candidates = [
+        base.join(".xi/AGENTS.md"),
+        base.join(".agents/AGENTS.md"),
+        base.join("AGENTS.md"),
+    ];
+    for candidate in &candidates {
+        if candidate.exists() {
+            return fs::read_to_string(candidate).ok();
+        }
+    }
+    None
+}
+
 /// Helper to read and combine AGENTS.md content.
+///
+/// Composes a global file (`.xi/AGENTS.md` preferred, `.agents/AGENTS.md` as
+/// fallback), then walks from `cwd` up to root, taking at most one
+/// AGENTS.md per directory level using the same priority rule.
 pub fn read_agents_md(cwd: &str, test_home: Option<&Path>) -> String {
     let mut content = String::new();
 
-    // Check for ~/.xi/AGENTS.md
+    // Global: one file from home directory.
     let home_dir_buf = test_home
         .map(|p| p.to_path_buf())
         .or_else(|| BaseDirs::new().map(|bd| bd.home_dir().to_path_buf()));
-    if let Some(home_dir) = home_dir_buf.as_deref() {
-        let global_agents_md = home_dir.join(".xi/AGENTS.md");
-        if global_agents_md.exists()
-            && let Ok(file_content) = fs::read_to_string(&global_agents_md)
-        {
-            content.push_str(&file_content);
-            content.push('\n');
-        }
+    if let Some(home_dir) = home_dir_buf.as_deref()
+        && let Some(global) = read_directory_agents(home_dir)
+    {
+        content.push_str(&global);
+        content.push('\n');
     }
 
-    // Check cwd and its parent directories for AGENTS.md
+    // Walk cwd → root, one file per directory level.
     let mut current_dir = Path::new(cwd);
     loop {
-        let agents_md_path = current_dir.join("AGENTS.md");
-        if agents_md_path.exists()
-            && let Ok(file_content) = fs::read_to_string(&agents_md_path)
-        {
+        if let Some(file_content) = read_directory_agents(current_dir) {
             content.push_str(&file_content);
             content.push('\n');
         }

@@ -683,6 +683,94 @@ fn test_read_agents_md() {
 }
 
 #[test]
+fn test_read_agents_md_falls_back_to_dot_agents() {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    let temp_home = tempdir().unwrap();
+    let home_path = temp_home.path();
+    let temp_working = tempdir().unwrap();
+    let working_path = temp_working.path();
+
+    // Only ~/.agents/AGENTS.md exists (no ~/.xi/AGENTS.md).
+    let agents_md = home_path.join(".agents/AGENTS.md");
+    fs::create_dir_all(agents_md.parent().unwrap()).unwrap();
+    fs::write(&agents_md, "Global .agents config\n").unwrap();
+
+    let cwd = working_path.display().to_string();
+    let concatenated = crate::agent::system_prompt::read_agents_md(&cwd, Some(home_path));
+
+    assert!(concatenated.contains("Global .agents config"));
+
+    temp_home.close().unwrap();
+    temp_working.close().unwrap();
+}
+
+#[test]
+fn test_read_agents_md_xi_overrides_agents_at_same_level() {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    let temp_home = tempdir().unwrap();
+    let home_path = temp_home.path();
+
+    // Both ~/.xi/AGENTS.md and ~/.agents/AGENTS.md exist.
+    let xi_agents_md = home_path.join(".xi/AGENTS.md");
+    fs::create_dir_all(xi_agents_md.parent().unwrap()).unwrap();
+    fs::write(&xi_agents_md, ".xi content\n").unwrap();
+
+    let agents_md = home_path.join(".agents/AGENTS.md");
+    fs::create_dir_all(agents_md.parent().unwrap()).unwrap();
+    fs::write(&agents_md, ".agents content\n").unwrap();
+
+    let cwd = tempdir().unwrap();
+    let concatenated = crate::agent::system_prompt::read_agents_md(
+        &cwd.path().display().to_string(),
+        Some(home_path),
+    );
+
+    // .xi takes priority; .agents must not appear.
+    assert!(concatenated.contains(".xi content"));
+    assert!(!concatenated.contains(".agents content"));
+
+    temp_home.close().unwrap();
+    cwd.close().unwrap();
+}
+
+#[test]
+fn test_read_agents_md_dot_xi_in_cwd_walk() {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    let temp_home = tempdir().unwrap();
+    let home_path = temp_home.path();
+
+    // No global file.
+    let working = tempdir().unwrap();
+    let working_path = working.path();
+
+    // .xi/AGENTS.md inside cwd (prioritised over bare AGENTS.md).
+    let xi_path = working_path.join(".xi/AGENTS.md");
+    fs::create_dir_all(xi_path.parent().unwrap()).unwrap();
+    fs::write(&xi_path, ".xi project config\n").unwrap();
+
+    // Also create bare AGENTS.md to confirm it's NOT picked up.
+    fs::write(working_path.join("AGENTS.md"), "bare config\n").unwrap();
+
+    let cwd = working_path.display().to_string();
+    let concatenated = crate::agent::system_prompt::read_agents_md(&cwd, Some(home_path));
+
+    assert!(concatenated.contains(".xi project config"));
+    assert!(!concatenated.contains("bare config"));
+
+    temp_home.close().unwrap();
+    working.close().unwrap();
+}
+
+#[test]
 fn test_read_agents_md_from_nested_cwd_includes_parent_chain_in_order() {
     use std::fs;
 

@@ -1,8 +1,37 @@
 # Agent Hooks
 
 Hooks allow you to define custom commands that run automatically at specific
-points during an agent session.  They are configured in
-`~/.config/xi/config.toml`.
+points during an agent session.  They are configured in TOML files discovered
+from multiple sources.  All hooks from all sources run — they are additive,
+never replace each other.
+
+## Configuration sources
+
+Hooks are loaded from three layers in run order (deepest first):
+
+| Layer | Sources (priority order per location) |
+|-------|----------------------------------------|
+| Project-local walk | cwd → root: `.xi/hooks.toml` → `.agents/hooks.toml` (first match per directory) |
+| Home standalone   | `~/.xi/hooks.toml` → `$XDG_CONFIG_HOME/xi/hooks.toml` → `~/.agents/hooks.toml` |
+| Global config     | `[hooks]` section in `~/.config/xi/config.toml` |
+
+Each file uses the same `[[hooks.<point>]]` TOML format shown below.
+Only one file is taken per directory level — if `.xi/hooks.toml` exists,
+`.agents/hooks.toml` at the same level is skipped.
+
+### Per-project hooks
+
+Place a `.xi/hooks.toml` in your project root:
+
+```toml
+# .xi/hooks.toml — fires for any session with cwd in this project
+[[hooks.pre_tool]]
+bash = "echo 'project rule enforced'"
+timeout = 5
+```
+
+This file will be picked up automatically when xi-agent's working directory
+is inside (or below) that directory.
 
 ## Hook points
 

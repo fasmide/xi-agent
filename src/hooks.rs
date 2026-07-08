@@ -470,6 +470,125 @@ pub async fn maybe_run_hook(
     }
 }
 
+// ── Hook file discovery ───────────────────────────────────────────────────────
+
+/// Parse a standalone hooks TOML file into a hooks map.
+///
+/// Returns `None` when the file does not exist, cannot be read, or contains
+/// invalid TOML (a warning is logged in the latter case).
+fn read_hooks_file(path: &std::path::Path) -> Option<HashMap<HookPoint, Vec<HookConfig>>> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    // The file can define any number of `[[hooks.<point>]]` tables.
+    #[derive(serde::Deserialize)]
+    struct HooksWrapper {
+        hooks: Option<HashMap<HookPoint, Vec<HookConfig>>>,
+    }
+
+    match toml::from_str::<HooksWrapper>(&content) {
+        Ok(wrapper) => wrapper.hooks,
+        Err(e) => {
+            log::warn!("hooks: failed to parse {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Merge `source` hooks into `target`, extending each hook point's config list.
+fn merge_hooks(
+    target: &mut HashMap<HookPoint, Vec<HookConfig>>,
+    source: HashMap<HookPoint, Vec<HookConfig>>,
+) {
+    for (point, configs) in source {
+        target.entry(point).or_default().extend(configs);
+    }
+}
+
+/// Discover hooks by walking from `cwd` up to the filesystem root, reading
+/// `.xi/hooks.toml` (preferred) or `.agents/hooks.toml` (fallback) from each
+/// directory level.
+fn load_hooks_from_walk(cwd: &std::path::Path) -> HashMap<HookPoint, Vec<HookConfig>> {
+    let mut hooks = HashMap::new();
+    let mut current = Some(cwd);
+
+    while let Some(dir) = current {
+        let xi_path = dir.join(".xi").join("hooks.toml");
+        let agents_path = dir.join(".agents").join("hooks.toml");
+
+        let mut loaded = false;
+        if let Some(file_hooks) = read_hooks_file(&xi_path) {
+            merge_hooks(&mut hooks, file_hooks);
+            loaded = true;
+        }
+        if !loaded && let Some(file_hooks) = read_hooks_file(&agents_path) {
+            merge_hooks(&mut hooks, file_hooks);
+        }
+
+        current = dir.parent();
+    }
+
+    hooks
+}
+
+/// Discover hooks from standalone home-directory files.
+///
+/// Order: `~/.xi/hooks.toml` → `$XDG_CONFIG_HOME/xi/hooks.toml` →
+/// `~/.agents/hooks.toml`.
+fn load_hooks_from_home_standalone() -> HashMap<HookPoint, Vec<HookConfig>> {
+    let mut hooks = HashMap::new();
+
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+
+    // ~/.xi/hooks.toml
+    if let Some(ref home) = home
+        && let Some(file_hooks) = read_hooks_file(&home.join(".xi").join("hooks.toml"))
+    {
+        merge_hooks(&mut hooks, file_hooks);
+    }
+
+    // $XDG_CONFIG_HOME/xi/hooks.toml
+    if let Ok(dirs) = crate::dirs::project_dirs()
+        && let Some(file_hooks) = read_hooks_file(&dirs.config_dir().join("hooks.toml"))
+    {
+        merge_hooks(&mut hooks, file_hooks);
+    }
+
+    // ~/.agents/hooks.toml
+    if let Some(ref home) = home
+        && let Some(file_hooks) = read_hooks_file(&home.join(".agents").join("hooks.toml"))
+    {
+        merge_hooks(&mut hooks, file_hooks);
+    }
+
+    hooks
+}
+
+/// Load all hooks for a session.
+///
+/// Merges hooks from three layers in order (earliest runs first in the agent
+/// loop):
+///
+/// 1. Walk from `cwd` → root, reading `.xi/hooks.toml` (preferred) or
+///    `.agents/hooks.toml` (fallback) from each directory.
+/// 2. Home standalone files:
+///    `~/.xi/hooks.toml` → `$XDG_CONFIG_HOME/xi/hooks.toml` →
+///    `~/.agents/hooks.toml`.
+/// 3. Hooks from `~/.config/xi/config.toml` (`config_hooks`).
+///
+/// All layers are additive — hooks from every discovered source run.
+pub fn load_hooks(
+    cwd: &str,
+    config_hooks: &HashMap<HookPoint, Vec<HookConfig>>,
+) -> HashMap<HookPoint, Vec<HookConfig>> {
+    let mut hooks = load_hooks_from_walk(std::path::Path::new(cwd));
+    merge_hooks(&mut hooks, load_hooks_from_home_standalone());
+    merge_hooks(&mut hooks, config_hooks.clone());
+    hooks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,5 +802,247 @@ cwd = "/tmp"
         };
         let label = hook_label(&cfg);
         assert!(label.starts_with("/usr/bin/mpg123"), "label={label}");
+    }
+
+    // ── read_hooks_file ──────────────────────────────────────────────────
+
+    #[test]
+    fn read_hooks_file_returns_none_for_missing() {
+        let result = read_hooks_file(std::path::Path::new("/tmp/nonexistent-hooks.toml"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn read_hooks_file_parses_valid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hooks.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[hooks.pre_tool]]
+bash = "echo hello"
+timeout = 5
+"#,
+        )
+        .unwrap();
+
+        let hooks = read_hooks_file(&path).expect("should parse");
+        assert_eq!(hooks.len(), 1);
+        assert!(hooks.contains_key(&HookPoint::PreTool));
+        let configs = &hooks[&HookPoint::PreTool];
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].bash.as_deref(), Some("echo hello"));
+        assert_eq!(configs[0].timeout, 5);
+    }
+
+    #[test]
+    fn read_hooks_file_returns_none_for_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hooks.toml");
+        std::fs::write(&path, "not valid {{{ toml").unwrap();
+
+        let hooks = read_hooks_file(&path);
+        assert!(hooks.is_none(), "invalid TOML should return None");
+    }
+
+    // ── merge_hooks ──────────────────────────────────────────────────────
+
+    #[test]
+    fn merge_hooks_extends_existing_point() {
+        let mut target = HashMap::from([(
+            HookPoint::PreTool,
+            vec![HookConfig {
+                bash: Some("first".into()),
+                timeout: 1,
+                ..Default::default()
+            }],
+        )]);
+
+        let source = HashMap::from([(
+            HookPoint::PreTool,
+            vec![HookConfig {
+                bash: Some("second".into()),
+                timeout: 2,
+                ..Default::default()
+            }],
+        )]);
+
+        merge_hooks(&mut target, source);
+        let configs = &target[&HookPoint::PreTool];
+        assert_eq!(configs.len(), 2);
+        assert_eq!(configs[0].bash.as_deref(), Some("first"));
+        assert_eq!(configs[1].bash.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn merge_hooks_adds_new_point() {
+        let mut target: HashMap<HookPoint, Vec<HookConfig>> = HashMap::new();
+        let source = HashMap::from([(
+            HookPoint::OnDone,
+            vec![HookConfig {
+                bash: Some("done".into()),
+                ..Default::default()
+            }],
+        )]);
+
+        merge_hooks(&mut target, source);
+        assert!(target.contains_key(&HookPoint::OnDone));
+        assert_eq!(target[&HookPoint::OnDone].len(), 1);
+    }
+
+    // ── load_hooks_from_walk ─────────────────────────────────────────────
+
+    #[test]
+    fn load_hooks_from_walk_discovers_xi_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let xi_dir = dir.path().join(".xi");
+        std::fs::create_dir(&xi_dir).unwrap();
+        std::fs::write(
+            xi_dir.join("hooks.toml"),
+            r#"
+[[hooks.pre_turn]]
+bash = "echo xi"
+"#,
+        )
+        .unwrap();
+
+        let hooks = load_hooks_from_walk(dir.path());
+        assert!(hooks.contains_key(&HookPoint::PreTurn));
+        assert_eq!(
+            hooks[&HookPoint::PreTurn][0].bash.as_deref(),
+            Some("echo xi")
+        );
+    }
+
+    #[test]
+    fn load_hooks_from_walk_falls_back_to_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents_dir = dir.path().join(".agents");
+        std::fs::create_dir(&agents_dir).unwrap();
+        std::fs::write(
+            agents_dir.join("hooks.toml"),
+            r#"
+[[hooks.pre_turn]]
+bash = "echo agents"
+"#,
+        )
+        .unwrap();
+
+        let hooks = load_hooks_from_walk(dir.path());
+        assert_eq!(
+            hooks[&HookPoint::PreTurn][0].bash.as_deref(),
+            Some("echo agents")
+        );
+    }
+
+    #[test]
+    fn load_hooks_from_walk_xi_overrides_agents() {
+        let dir = tempfile::tempdir().unwrap();
+        let xi_dir = dir.path().join(".xi");
+        std::fs::create_dir(&xi_dir).unwrap();
+        std::fs::write(
+            xi_dir.join("hooks.toml"),
+            r#"
+[[hooks.pre_turn]]
+bash = "echo xi"
+"#,
+        )
+        .unwrap();
+
+        let agents_dir = dir.path().join(".agents");
+        std::fs::create_dir(&agents_dir).unwrap();
+        std::fs::write(
+            agents_dir.join("hooks.toml"),
+            r#"
+[[hooks.pre_turn]]
+bash = "echo agents"
+"#,
+        )
+        .unwrap();
+
+        let hooks = load_hooks_from_walk(dir.path());
+        // Only .xi content should appear; .agents is skipped.
+        assert_eq!(hooks[&HookPoint::PreTurn].len(), 1);
+        assert_eq!(
+            hooks[&HookPoint::PreTurn][0].bash.as_deref(),
+            Some("echo xi")
+        );
+    }
+
+    #[test]
+    fn load_hooks_from_walk_nested_dirs_ordering() {
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+
+        // Parent has a hook.
+        let parent_xi = root.path().join(".xi");
+        std::fs::create_dir(&parent_xi).unwrap();
+        std::fs::write(
+            parent_xi.join("hooks.toml"),
+            r#"
+[[hooks.pre_tool]]
+bash = "echo parent"
+"#,
+        )
+        .unwrap();
+
+        // Child has a hook.
+        let child_xi = child.join(".xi");
+        std::fs::create_dir(&child_xi).unwrap();
+        std::fs::write(
+            child_xi.join("hooks.toml"),
+            r#"
+[[hooks.pre_tool]]
+bash = "echo child"
+"#,
+        )
+        .unwrap();
+
+        let hooks = load_hooks_from_walk(&child);
+        let configs = &hooks[&HookPoint::PreTool];
+        assert_eq!(
+            configs.len(),
+            2,
+            "expected hooks from both child and parent"
+        );
+        // Child-level hooks come first (deepest first).
+        assert_eq!(configs[0].bash.as_deref(), Some("echo child"));
+        assert_eq!(configs[1].bash.as_deref(), Some("echo parent"));
+    }
+
+    // ── load_hooks full integration ──────────────────────────────────────
+
+    #[test]
+    fn load_hooks_merges_all_layers() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Layer 1: walk — .xi/hooks.toml at cwd.
+        let xi_dir = dir.path().join(".xi");
+        std::fs::create_dir(&xi_dir).unwrap();
+        std::fs::write(
+            xi_dir.join("hooks.toml"),
+            r#"
+[[hooks.pre_tool]]
+bash = "echo walk"
+"#,
+        )
+        .unwrap();
+
+        // Layer 3: config hooks (skip home standalone since HOME is set).
+        let config_hooks = HashMap::from([(
+            HookPoint::PreTool,
+            vec![HookConfig {
+                bash: Some("echo config".into()),
+                ..Default::default()
+            }],
+        )]);
+
+        let hooks = load_hooks(&dir.path().display().to_string(), &config_hooks);
+        let configs = &hooks[&HookPoint::PreTool];
+        assert_eq!(configs.len(), 2, "expected hooks from walk + config");
+        // Walk hooks run first.
+        assert_eq!(configs[0].bash.as_deref(), Some("echo walk"));
+        assert_eq!(configs[1].bash.as_deref(), Some("echo config"));
     }
 }

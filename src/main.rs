@@ -242,6 +242,10 @@ async fn main() -> io::Result<()> {
     let tool_output_log = Arc::new(std::sync::Mutex::new(ToolOutputLog::new("init")));
     let hook_ipc = HookIpcPublisherHandle::new(&config.hook_ipc);
 
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| ".".to_string());
+
     let mut app = App::new(
         initial_instance,
         &initial_model,
@@ -256,7 +260,7 @@ async fn main() -> io::Result<()> {
             manual_compaction_instructions: None,
             executor: std::sync::Arc::new(crate::agent::DefaultToolExecutor::new()),
             system_prompt: None,
-            hooks: config.hooks.clone(),
+            hooks: crate::hooks::load_hooks(&cwd, &config.hooks),
             hook_ipc: hook_ipc.clone(),
             session_id: String::new(),
         },
@@ -274,9 +278,6 @@ async fn main() -> io::Result<()> {
         custom_tools,
     )
     .await;
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| ".".to_string());
     app.init_session_persistence(cwd.clone());
     let system_prompt = build_system_prompt(&tools, &cwd, &loaded_skills);
     app.agent_config.tools = tools;

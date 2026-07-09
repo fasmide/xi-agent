@@ -40,14 +40,25 @@ is inside (or below) that directory.
 These hooks fire at the main decision boundaries of the agent loop.  They
 receive structured JSON on stdin describing the current action.
 
-| Hook point   | When it fires                                                               |
-|--------------|-----------------------------------------------------------------------------|
-| `pre_tool`   | Just before a tool is executed                                              |
-| `post_tool`  | Just after a tool completes                                                 |
-| `pre_turn`   | At the start of each LLM cycle (before the model is called)                 |
-| `post_turn`  | After each LLM cycle completes (may fire multiple times per user prompt)    |
-| `on_done`    | **Once** when the agent finishes its full response to a user prompt         |
-| `on_error`   | When an unhandled error occurs during the agent loop                        |
+| Hook point              | When it fires                                                               |
+|-------------------------|-----------------------------------------------------------------------------|
+| `pre_tool`              | Just before a tool is executed                                              |
+| `post_tool`             | Just after a tool completes                                                 |
+| `pre_turn`              | At the start of each LLM cycle (before the model is called)                 |
+| `post_turn`             | After each LLM cycle completes (may fire multiple times per user prompt)    |
+| `on_done`               | **Once** when the agent finishes its full response to a user prompt         |
+| `on_error`              | When an unhandled error occurs during the agent loop                        |
+| `on_cancel`             | When the agent loop is cancelled by the user (Esc key or programmatic abort) |
+
+### Interaction hooks
+
+These hooks fire at user-interaction boundaries.  They receive structured JSON
+on stdin.
+
+| Hook point               | When it fires                                                              |
+|--------------------------|----------------------------------------------------------------------------|
+| `on_ask_user`            | The agent asks the user a question via the `ask_user` tool                  |
+| `on_steering_consumed`   | A queued steering message is consumed at a turn boundary                    |
 
 ### Notification hooks
 
@@ -62,6 +73,7 @@ event data.
 | `on_first_text_token`     | First visible text token arrives                                           |
 | `on_status_update`        | Provider sends a transient status (e.g. rate-limit, retry)                 |
 | `on_compacting`           | Session compaction begins                                                  |
+| `on_compaction_done`      | Session compaction completes                                               |
 | `on_external_change`      | External file modification detected before a turn                          |
 | `on_idle`                 | TUI returns to idle, waiting for user input (fires after `on_done`)        |
 
@@ -156,7 +168,7 @@ powershell = "Write-Host 'running tool'"
 | `XI_HOOK_POINT`   | Hook point name (e.g. `pre_tool`)  |
 | `XI_SESSION_ID`   | Persistent session identifier      |
 
-### Stdin JSON (lifecycle hooks)
+### Stdin JSON (lifecycle and interaction hooks)
 
 These payloads let you inspect what the agent is doing.
 
@@ -198,6 +210,34 @@ the tool process's real exit code.
 
 `tool` and `arguments` are **optional** — they are omitted when the error is
 not tied to a specific tool (e.g. a provider failure).
+
+`on_cancel` — receives no stdin JSON (only environment variables).
+
+`on_ask_user`:
+
+```json
+{
+  "question": "Which approach would you prefer?"
+}
+```
+
+`on_steering_consumed`:
+
+```json
+{
+  "text": "stop using bash"
+}
+```
+
+`on_compaction_done`:
+
+```json
+{
+  "tokens_before": 12000,
+  "tokens_after": 4500,
+  "retained_event_count": 12
+}
+```
 
 ### Stdin JSON (notification hooks with data)
 

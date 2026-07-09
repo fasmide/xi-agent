@@ -43,8 +43,9 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 pub use crate::hook_ipc::{
-    HookIpcPublisherHandle, empty_payload, ipc_external_change_payload, ipc_on_error_payload,
-    ipc_pre_tool_payload, ipc_status_update_payload, ipc_tool_intent_payload,
+    HookIpcPublisherHandle, empty_payload, ipc_ask_user_payload, ipc_compaction_done_payload,
+    ipc_external_change_payload, ipc_on_error_payload, ipc_pre_tool_payload,
+    ipc_status_update_payload, ipc_steering_consumed_payload, ipc_tool_intent_payload,
 };
 
 // ── HookPoint ─────────────────────────────────────────────────────────────────
@@ -84,6 +85,14 @@ pub enum HookPoint {
     OnExternalChange,
     /// When the provider sends a transient status update (e.g. rate-limit).
     OnStatusUpdate,
+    /// When the agent loop is cancelled (Esc key or programmatic abort).
+    OnCancel,
+    /// When a queued steering message is consumed at a turn boundary.
+    OnSteeringConsumed,
+    /// When the agent asks the user a question (via the `ask_user` tool).
+    OnAskUser,
+    /// When session compaction completes.
+    OnCompactionDone,
 }
 
 impl std::fmt::Display for HookPoint {
@@ -102,6 +111,10 @@ impl std::fmt::Display for HookPoint {
             Self::OnCompacting => write!(f, "on_compacting"),
             Self::OnExternalChange => write!(f, "on_external_change"),
             Self::OnStatusUpdate => write!(f, "on_status_update"),
+            Self::OnCancel => write!(f, "on_cancel"),
+            Self::OnSteeringConsumed => write!(f, "on_steering_consumed"),
+            Self::OnAskUser => write!(f, "on_ask_user"),
+            Self::OnCompactionDone => write!(f, "on_compaction_done"),
         }
     }
 }
@@ -140,8 +153,8 @@ pub struct HookConfig {
     pub cwd: Option<String>,
 
     /// When non-empty, the hook only fires when the current tool name is in
-    /// this list (case-sensitive). Only meaningful for `pre_tool` and
-    /// `post_tool` hooks; ignored for other hook points.
+    /// this list (case-sensitive). Only meaningful for `pre_tool`,
+    /// `post_tool`, and `on_tool_intent` hooks; ignored for other hook points.
     #[serde(default)]
     pub include_tools: Vec<String>,
 
@@ -419,6 +432,33 @@ pub fn on_error_json(
     payload
 }
 
+/// Build the JSON value for an `on_ask_user` hook stdin payload.
+pub fn on_ask_user_json(question: &str) -> serde_json::Value {
+    serde_json::json!({
+        "question": question,
+    })
+}
+
+/// Build the JSON value for an `on_steering_consumed` hook stdin payload.
+pub fn on_steering_consumed_json(text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "text": text,
+    })
+}
+
+/// Build the JSON value for an `on_compaction_done` hook stdin payload.
+pub fn on_compaction_done_json(
+    tokens_before: usize,
+    tokens_after: usize,
+    retained_event_count: usize,
+) -> serde_json::Value {
+    serde_json::json!({
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+        "retained_event_count": retained_event_count,
+    })
+}
+
 // ── Convenience: run tool hook ────────────────────────────────────────────────
 
 /// Check whether a hook should fire for the given tool name based on
@@ -605,6 +645,16 @@ mod tests {
             (HookPoint::PostTurn, "post_turn"),
             (HookPoint::OnError, "on_error"),
             (HookPoint::OnDone, "on_done"),
+            (HookPoint::OnFirstThinkingToken, "on_first_thinking_token"),
+            (HookPoint::OnFirstTextToken, "on_first_text_token"),
+            (HookPoint::OnIdle, "on_idle"),
+            (HookPoint::OnCompacting, "on_compacting"),
+            (HookPoint::OnExternalChange, "on_external_change"),
+            (HookPoint::OnStatusUpdate, "on_status_update"),
+            (HookPoint::OnCancel, "on_cancel"),
+            (HookPoint::OnSteeringConsumed, "on_steering_consumed"),
+            (HookPoint::OnAskUser, "on_ask_user"),
+            (HookPoint::OnCompactionDone, "on_compaction_done"),
         ];
         for (point, expected) in &cases {
             assert_eq!(point.to_string(), *expected);

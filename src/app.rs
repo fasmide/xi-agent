@@ -723,6 +723,9 @@ impl App {
         let ctx = crate::agent::types::ToolCallContext {
             id: call_id.clone(),
             tx: Some(tx.clone()),
+            hooks: std::collections::HashMap::new(),
+            hook_ipc: crate::hooks::HookIpcPublisherHandle::disabled(),
+            session_id: String::new(),
         };
 
         let selected_shell = self.shell.selected;

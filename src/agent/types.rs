@@ -222,6 +222,9 @@ impl ToolResult {
 ///
 /// Subprocess tools use this to forward live output chunks back to the UI via
 /// [`AgentEvent::ToolOutputChunk`].  Non-subprocess tools may ignore it.
+///
+/// Also carries hook dispatch data so tools can fire agent hooks (e.g.
+/// `on_ask_user`) from within their execution.
 #[derive(Clone)]
 pub struct ToolCallContext {
     /// The opaque tool call identifier assigned by the LLM provider.
@@ -229,6 +232,12 @@ pub struct ToolCallContext {
     /// Optional sender for live output chunks.  `None` in tests or wherever
     /// live streaming is not wired up.
     pub tx: Option<UnboundedSender<crate::app_event::AppEvent>>,
+    /// Agent-level hooks for this session.
+    pub hooks: std::collections::HashMap<crate::hooks::HookPoint, Vec<crate::hooks::HookConfig>>,
+    /// Best-effort process-wide IPC publisher for hook events.
+    pub hook_ipc: crate::hooks::HookIpcPublisherHandle,
+    /// Persistent session identifier.
+    pub session_id: String,
 }
 
 #[cfg(test)]
@@ -238,6 +247,9 @@ impl ToolCallContext {
         Self {
             id: id.into(),
             tx: None,
+            hooks: std::collections::HashMap::new(),
+            hook_ipc: crate::hooks::HookIpcPublisherHandle::disabled(),
+            session_id: String::new(),
         }
     }
 }
@@ -318,14 +330,23 @@ pub struct DefaultToolExecutor {
     pub before_tool_call: Option<BeforeToolCall>,
     /// Optional hook called after each tool execution. Return `Some(result)` to override.
     pub after_tool_call: Option<AfterToolCall>,
+    /// Agent-level hooks for this session (passed to [`ToolCallContext`]).
+    pub hooks: std::collections::HashMap<crate::hooks::HookPoint, Vec<crate::hooks::HookConfig>>,
+    /// Best-effort process-wide IPC publisher for hook events.
+    pub hook_ipc: crate::hooks::HookIpcPublisherHandle,
+    /// Persistent session identifier.
+    pub session_id: String,
 }
 
 impl DefaultToolExecutor {
-    /// Create a new executor with no hooks.
+    /// Create a new executor with no hooks and empty hook context.
     pub fn new() -> Self {
         Self {
             before_tool_call: None,
             after_tool_call: None,
+            hooks: std::collections::HashMap::new(),
+            hook_ipc: crate::hooks::HookIpcPublisherHandle::disabled(),
+            session_id: String::new(),
         }
     }
 
@@ -338,6 +359,7 @@ impl DefaultToolExecutor {
         Self {
             before_tool_call,
             after_tool_call,
+            ..Self::new()
         }
     }
 }
@@ -373,6 +395,9 @@ impl ToolExecutor for DefaultToolExecutor {
                         let ctx = ToolCallContext {
                             id: id.to_string(),
                             tx,
+                            hooks: self.hooks.clone(),
+                            hook_ipc: self.hook_ipc.clone(),
+                            session_id: self.session_id.clone(),
                         };
                         let r = tool.run(args.clone(), ctx).await;
                         let cmd_summary = args.get("command").and_then(|v| v.as_str());

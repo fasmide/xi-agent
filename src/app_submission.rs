@@ -39,7 +39,13 @@ impl App {
                 .session
                 .pending_manual_compaction_instructions
                 .take(),
-            executor: std::sync::Arc::new(crate::agent::DefaultToolExecutor::new()),
+            executor: std::sync::Arc::new({
+                let mut ex = crate::agent::DefaultToolExecutor::new();
+                ex.hooks = self.agent_config.hooks.clone();
+                ex.hook_ipc = self.agent_config.hook_ipc.clone();
+                ex.session_id = session_id.clone();
+                ex
+            }),
             system_prompt: self.agent_config.system_prompt.clone(),
             hooks: self.agent_config.hooks.clone(),
             hook_ipc: self.agent_config.hook_ipc.clone(),

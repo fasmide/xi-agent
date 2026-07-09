@@ -95,7 +95,7 @@ impl Tool for AskUserTool {
     fn run(
         &self,
         args: Value,
-        _ctx: crate::agent::types::ToolCallContext,
+        ctx: crate::agent::types::ToolCallContext,
     ) -> Pin<Box<dyn std::future::Future<Output = ToolResult> + Send + '_>> {
         Box::pin(async move {
             let Some(tx) = &self.tx else {
@@ -129,13 +129,29 @@ impl Tool for AskUserTool {
             let (reply_tx, reply_rx) = oneshot::channel();
 
             let request = AskRequest {
-                question,
+                question: question.clone(),
                 context,
                 options,
                 allow_multiple,
                 allow_freeform,
                 reply: reply_tx,
             };
+
+            // Fire the on_ask_user hook before blocking on user input.
+            ctx.hook_ipc.publish(
+                &ctx.session_id,
+                crate::hooks::HookPoint::OnAskUser,
+                None,
+                crate::hooks::ipc_ask_user_payload(&question),
+            );
+            crate::hooks::maybe_run_hook(
+                &ctx.hooks,
+                crate::hooks::HookPoint::OnAskUser,
+                &ctx.session_id,
+                Some(crate::hooks::on_ask_user_json(&question)),
+                None,
+            )
+            .await;
 
             if tx.send(AppEvent::AskUser(request)).is_err() {
                 return ToolResult::err("ask_user failed: UI channel closed");

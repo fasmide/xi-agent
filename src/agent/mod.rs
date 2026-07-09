@@ -79,10 +79,11 @@ struct HookDispatchContext<'a> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn drain_steering_messages(
+async fn drain_steering_messages(
     steering_rx: &mut UnboundedReceiver<String>,
     session_events: &mut Vec<SessionEvent>,
     tx: &UnboundedSender<AppEvent>,
+    hook_ctx: &HookDispatchContext<'_>,
 ) -> bool {
     let mut consumed = false;
     while let Ok(text) = steering_rx.try_recv() {
@@ -90,9 +91,23 @@ fn drain_steering_messages(
             text: text.clone(),
         }));
         session_events.push(SessionEvent::UserMessage {
-            content: text,
+            content: text.clone(),
             timestamp: 0,
         });
+        hook_ctx.hook_ipc.publish(
+            hook_ctx.session_id,
+            HookPoint::OnSteeringConsumed,
+            None,
+            crate::hooks::ipc_steering_consumed_payload(&text),
+        );
+        crate::hooks::maybe_run_hook(
+            hook_ctx.hooks,
+            HookPoint::OnSteeringConsumed,
+            hook_ctx.session_id,
+            Some(crate::hooks::on_steering_consumed_json(&text)),
+            None,
+        )
+        .await;
         consumed = true;
     }
     consumed
@@ -163,6 +178,28 @@ async fn emit_compaction(
     )
     .await?;
     tx.send_ignore(AppEvent::Agent(AgentEvent::CompactionDone(outcome.clone())));
+    config.hook_ipc.publish(
+        &config.session_id,
+        HookPoint::OnCompactionDone,
+        None,
+        crate::hooks::ipc_compaction_done_payload(
+            outcome.tokens_before,
+            outcome.tokens_after,
+            outcome.retained_event_count,
+        ),
+    );
+    crate::hooks::maybe_run_hook(
+        &config.hooks,
+        HookPoint::OnCompactionDone,
+        &config.session_id,
+        Some(crate::hooks::on_compaction_done_json(
+            outcome.tokens_before,
+            outcome.tokens_after,
+            outcome.retained_event_count,
+        )),
+        None,
+    )
+    .await;
     Ok(outcome)
 }
 
@@ -522,6 +559,20 @@ pub async fn run_agent_loop(
     loop {
         // ── Cancellation check ────────────────────────────────────────────────
         if *cancel_rx.borrow() {
+            config.hook_ipc.publish(
+                &config.session_id,
+                HookPoint::OnCancel,
+                None,
+                empty_payload(),
+            );
+            crate::hooks::maybe_run_hook(
+                &config.hooks,
+                HookPoint::OnCancel,
+                &config.session_id,
+                None,
+                None,
+            )
+            .await;
             return;
         }
 
@@ -555,7 +606,17 @@ pub async fn run_agent_loop(
         }
 
         // ── Insert queued steering messages ───────────────────────────────────
-        let _ = drain_steering_messages(&mut steering_rx, &mut session_events, &tx);
+        let _ = drain_steering_messages(
+            &mut steering_rx,
+            &mut session_events,
+            &tx,
+            &HookDispatchContext {
+                hooks: &config.hooks,
+                hook_ipc: &config.hook_ipc,
+                session_id: &config.session_id,
+            },
+        )
+        .await;
 
         // ── Build message list ────────────────────────────────────────────────
         projection.ensure_current(&session_events);
@@ -713,7 +774,18 @@ pub async fn run_agent_loop(
                 // If a steering message arrived while the LLM was generating,
                 // consume it only after the completed assistant turn has been
                 // committed via TurnEnd so transcript order remains natural.
-                if drain_steering_messages(&mut steering_rx, &mut session_events, &tx) {
+                if drain_steering_messages(
+                    &mut steering_rx,
+                    &mut session_events,
+                    &tx,
+                    &HookDispatchContext {
+                        hooks: &config.hooks,
+                        hook_ipc: &config.hook_ipc,
+                        session_id: &config.session_id,
+                    },
+                )
+                .await
+                {
                     continue;
                 }
 
@@ -813,10 +885,35 @@ pub async fn run_agent_loop(
                 .await;
 
                 if let BatchOutcome::Cancelled = batch_outcome {
+                    config.hook_ipc.publish(
+                        &config.session_id,
+                        HookPoint::OnCancel,
+                        None,
+                        empty_payload(),
+                    );
+                    crate::hooks::maybe_run_hook(
+                        &config.hooks,
+                        HookPoint::OnCancel,
+                        &config.session_id,
+                        None,
+                        None,
+                    )
+                    .await;
                     return;
                 }
 
-                if drain_steering_messages(&mut steering_rx, &mut session_events, &tx) {
+                if drain_steering_messages(
+                    &mut steering_rx,
+                    &mut session_events,
+                    &tx,
+                    &HookDispatchContext {
+                        hooks: &config.hooks,
+                        hook_ipc: &config.hook_ipc,
+                        session_id: &config.session_id,
+                    },
+                )
+                .await
+                {
                     continue;
                 }
             }

@@ -275,6 +275,26 @@ pub fn ipc_external_change_payload(paths: &[std::path::PathBuf]) -> Value {
     })
 }
 
+pub fn ipc_ask_user_payload(question: &str) -> Value {
+    json!({"question": question})
+}
+
+pub fn ipc_steering_consumed_payload(text: &str) -> Value {
+    json!({"text": text})
+}
+
+pub fn ipc_compaction_done_payload(
+    tokens_before: usize,
+    tokens_after: usize,
+    retained: usize,
+) -> Value {
+    json!({
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+        "retained_event_count": retained,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
